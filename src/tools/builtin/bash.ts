@@ -26,7 +26,7 @@ function isSafe(command: string): boolean {
 
 export const bash: ToolDefinition<BashArgs, string> = {
   name: "bash",
-  description: "Run a shell command in the working directory. Only a limited set of read-only commands run automatically; other commands are denied.",
+  description: `Run a shell command in the working directory. Commands outside the automatic allowlist are denied; this tool does not request approval.\nWHEN TO USE: Running simple read-only inspection commands such as ls, pwd, find, head, tail, wc, which, or git status/diff/log/show.\nWHEN NOT TO USE: Reading a file (use read); searching file contents (use grep); writing files, installing packages, changing system state, or executing commands that need approval.\nARGUMENTS:\n- command (string, required): One simple command invocation. Shell chaining, pipes, redirection, substitutions, and newlines are blocked.\nThe automatic allowlist is intentionally restrictive; denied commands return an error rather than being executed.`, 
   parameters,
   parse,
   async execute({ command }, { cwd, signal }) {

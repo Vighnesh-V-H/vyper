@@ -35,7 +35,12 @@ export interface ToolRunContext extends ToolExecutionInput {
 export interface ToolContext {
   readonly cwd: string;
   readonly signal: AbortSignal;
+  /**
+   * Queue a user message after the current tool-result batch. With concurrent
+   * tools, messages follow completion order; the default executor is sequential.
+   */
   readonly deferContext?: (context: UserMessage) => void;
+  /** Finish the turn after the current tool batch instead of calling the model again. */
   readonly concludeTurn?: () => void;
 }
 
@@ -47,9 +52,28 @@ export interface ToolDefinition<TArgs = unknown, TResult = unknown> extends Tool
   render(args: TArgs, result: TResult): string;
 }
 
+/**
+ * The narrow surface the agent loop and executor need from a set of tools.
+ * Implement this to plug in a different catalog without adopting ToolRegistry.
+ */
+export interface ToolCatalog {
+  get(name: string): ToolDefinition | undefined;
+  list(): readonly ToolDefinition[];
+}
+
+export type ToolExecutionErrorKind =
+  | "unknown-tool"
+  | "invalid-arguments"
+  | "cancelled"
+  | "timeout"
+  | "execution";
+
 export interface ToolExecutionResult {
   readonly callId: string;
   readonly name: string;
   readonly content: string;
   readonly isError: boolean;
+  /** Machine-readable failure class; absent on success. */
+  readonly errorKind?: ToolExecutionErrorKind;
+  readonly durationMs: number;
 }

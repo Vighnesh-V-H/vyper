@@ -1,4 +1,3 @@
-
 export type {
   Message,
   ToolCall,
@@ -10,12 +9,13 @@ export type {
   JsonSchema,
   ToolSchema,
   ToolContext,
+  ToolCatalog,
   ToolDefinition,
+  ToolExecutionErrorKind,
   ToolExecutionInput,
   ToolExecutionResult,
   ToolRunContext,
 } from "./tools";
-
 
 export type {
   Model,
@@ -25,7 +25,12 @@ export type {
 } from "./model";
 
 export type {
+  AgentErrorStage,
+  AgentEvent,
+  AgentEventHandler,
   AgentOptions,
+  AgentResult,
+  AgentRunOptions,
 } from "./agent";
 
 export type {

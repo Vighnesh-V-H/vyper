@@ -58,6 +58,10 @@ export interface PrepareContextInput {
 }
 
 export interface PreparedContext {
+  /**
+   * Conversation to send to the provider. The agent loop validates it and
+   * rejects the run if assistant/tool message pairs are malformed.
+   */
   messages: Message[];
   system?: string;
   /** True when prepare() compacted or otherwise rewrote history. */
@@ -68,13 +72,17 @@ export interface PreparedContext {
 export interface ContextManager {
   /**
    * Called immediately before every model call.
-   * Must be pure-ish: it may rewrite history, but it should not mutate the input array.
+   * The input array is a copy, so mutating it cannot corrupt agent state.
+   * A returned rewrite is adopted for later steps and must remain a valid
+   * conversation: every assistant tool call needs an adjacent matching tool
+   * result, in call order.
    */
   prepare(input: PrepareContextInput): Promise<PreparedContext>;
 
   /**
    * Called after every model response so the manager can calibrate estimates
-   * against provider-reported usage.
+   * against provider-reported usage. The message array is a copy. Errors are
+   * advisory: the loop reports them as warning events and continues.
    */
   observe(usage: TokenUsage, messages: Message[]): void;
 

@@ -25,7 +25,7 @@ function parse(input: unknown): ReadArgs {
 
 export const read: ToolDefinition<ReadArgs, string> = {
   name: "read",
-  description: "Read a text file from the working directory with 1-indexed line numbers.",
+  description: `Read a text file from the working directory and return numbered lines.\nWHEN TO USE: Inspecting a known source file, configuration file, or other text file; reading a specific range of lines.\nWHEN NOT TO USE: Searching across files (use grep); running commands (use bash); reading binary files or files outside the working directory.\nARGUMENTS:\n- path (string, required): File path relative to the working directory.\n- offset (integer, optional): First line to return, 1-indexed; defaults to 1.\n- limit (integer, optional): Maximum lines to return; defaults to 500 and is capped at 500.`, 
   parameters,
   parse,
   async execute({ path, offset = 1, limit = 500 }, { cwd, signal }) {

@@ -29,7 +29,7 @@ const MAX_MATCHES = 100;
 
 export const grep: ToolDefinition<GrepArgs, string> = {
   name: "grep",
-  description: "Search text files with a regular expression; returns matching file paths and line numbers.",
+  description: `Search text files with a regular expression and return matching paths, line numbers, and lines.\nWHEN TO USE: Finding definitions, references, TODOs, error messages, or other text patterns across a file or directory.\nWHEN NOT TO USE: Reading a known file or a precise range of lines (use read); running shell commands (use bash); searching binary data.\nARGUMENTS:\n- pattern (string, required): JavaScript regular expression used to match each line. Invalid expressions return an error.\n- path (string, optional): File or directory relative to the working directory; defaults to ".".\n- glob (string, optional): Filename filter; supports an exact filename or a simple suffix pattern such as "*.ts".\nSearch excludes .git, node_modules, .next, dist, and build, and limits results for bounded resource use.`, 
   parameters,
   parse,
   async execute({ pattern, path = ".", glob }, { cwd, signal }) {

@@ -1,30 +1,62 @@
 import type { ModelTool } from "../types/model";
-import type { ToolDefinition } from "../types/tools";
+import type { ToolCatalog, ToolDefinition } from "../types/tools";
+import { validateToolDefinition } from "./validation";
 
-export class ToolRegistry {
-  readonly #tools = new Map<string, ToolDefinition>();
+/**
+ * An insertion-ordered catalog of named tools.
+ *
+ * Registration is validated and atomic: if any candidate is invalid or a name
+ * collides, the registry is left unchanged. Lookups are exact and
+ * case-sensitive; unknown names are reported by the execution engine rather
+ * than throwing here.
+ */
+export class ToolRegistry implements ToolCatalog {
+  readonly tools = new Map<string, ToolDefinition>();
 
   constructor(tools: Iterable<ToolDefinition> = []) {
-    for (const tool of tools) this.register(tool);
+    this.registerMany(tools);
   }
 
   register(tool: ToolDefinition): this {
-    if (!tool.name.trim()) throw new Error("Tool name must not be empty");
-    if (this.#tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`);
-    this.#tools.set(tool.name, tool);
+    return this.registerMany([tool]);
+  }
+
+  registerMany(tools: Iterable<ToolDefinition>): this {
+    const pending = [...tools];
+    const names = new Set<string>();
+
+    for (const tool of pending) {
+      validateToolDefinition(tool);
+      if (this.tools.has(tool.name) || names.has(tool.name)) {
+        throw new Error(`Tool already registered: ${tool.name}`);
+      }
+      names.add(tool.name);
+    }
+
+    for (const tool of pending) this.tools.set(tool.name, tool);
     return this;
   }
 
   get(name: string): ToolDefinition | undefined {
-    return this.#tools.get(name);
+    return this.tools.get(name);
   }
 
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
+
+  get size(): number {
+    return this.tools.size;
+  }
+
+  /** A snapshot in registration order. Mutating the array cannot alter the registry. */
   list(): readonly ToolDefinition[] {
-    return [...this.#tools.values()];
+    return [...this.tools.values()];
   }
 
+  /** Provider-neutral tool descriptions. Each call returns fresh objects. */
   toModelTools(): ModelTool[] {
-    return [...this.#tools.values()].map(({ name, description, parameters }) => ({
+    return [...this.tools.values()].map(({ name, description, parameters }) => ({
       name,
       description,
       inputSchema: parameters,

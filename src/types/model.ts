@@ -21,6 +21,10 @@ export type ModelStreamChunk =
   | { type: "done" };
 
 export interface Model {
+  /**
+   * Provider adapters own retries, backoff, and transport error normalization.
+   * The agent loop fails fast on model errors.
+   */
   generate(input: {
     messages: Message[];
     tools: ModelTool[];
