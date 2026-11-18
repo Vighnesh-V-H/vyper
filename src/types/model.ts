@@ -1,9 +1,10 @@
 import type { Message, ToolCall } from "./message";
+import type { JsonSchema } from "./tools";
 
 export interface ModelTool {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: JsonSchema;
 }
 
 export interface ModelResponse {

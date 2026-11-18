@@ -23,10 +23,10 @@ export interface ContextBudget {
   /** The model's total context window. Required — it is model-specific. */
   contextWindow: number;
 
-  /** Headroom reserved for the next model output. Pi defaults to 16_384. */
+  /** Headroom reserved for the next model output. */
   reserveTokens?: number;
 
-  /** Recent context to keep verbatim. Pi defaults to 20_000. */
+  /** Recent context to keep verbatim. */
   keepRecentTokens?: number;
 
   /** Compact when estimated tokens exceed this fraction of the window. Codex/Eve use 0.9. */
@@ -117,10 +117,10 @@ export interface ContextStore {
 }
 
 export type ContextSource =
-  | { kind: "project-file"; path: string; content: string; priority: number }
-  | { kind: "memory"; id: string; content: string; priority: number }
-  | { kind: "retrieval"; uri: string; content: string; priority: number }
-  | { kind: "runtime"; key: string; value: string; priority: number };
+  | { src: "project-file"; path: string; content: string; priority: number }
+  | { src: "memory"; id: string; content: string; priority: number }
+  | { src: "retrieval"; uri: string; content: string; priority: number }
+  | { src: "runtime"; key: string; value: string; priority: number };
 
 export interface ContextAssembler {
   assemble(input: {

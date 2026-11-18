@@ -5,8 +5,15 @@ export type {
 } from "./message";
 
 export type {
+  JsonPrimitive,
+  JsonValue,
+  JsonSchema,
+  ToolSchema,
   ToolContext,
   ToolDefinition,
+  ToolExecutionInput,
+  ToolExecutionResult,
+  ToolRunContext,
 } from "./tools";
 
 
