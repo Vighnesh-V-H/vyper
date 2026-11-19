@@ -4,23 +4,41 @@ import {
   InvalidToolCallsError,
 } from "../errors";
 import type { Message, ToolCall } from "../types/message";
+import { isNonEmptyString } from "../util/is-non-empty-string";
 import { parseToolCalls } from "./tool-calls";
+
+type UserMessage = Extract<Message, { role: "user" }>;
+
+function isUserText(message: Message | undefined): message is UserMessage {
+  return message?.role === "user" && typeof message.content === "string";
+}
+
+function mergeUserContent(previous: string, next: string): string {
+  return `${previous}\n\n${next}`;
+}
+
+function requireStringContent(message: Message, index: number): void {
+  if (typeof message.content !== "string") {
+    throw new ConversationError(
+      ERROR_MESSAGES.conversation.contentMustBeString(index),
+    );
+  }
+}
 
 function validateMessageShape(message: Message, index: number): void {
   if (!message || typeof message !== "object") {
-    throw new ConversationError(ERROR_MESSAGES.conversation.messageMustBeObject(index));
+    throw new ConversationError(
+      ERROR_MESSAGES.conversation.messageMustBeObject(index),
+    );
   }
 
   switch (message.role) {
     case "system":
-      throw new ConversationError(ERROR_MESSAGES.conversation.systemMessage(index));
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.systemMessage(index),
+      );
     case "user":
-      if (typeof message.content !== "string") {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.contentMustBeString(index),
-        );
-      }
-      return;
+      return requireStringContent(message, index);
     case "assistant":
       if (message.content !== undefined && typeof message.content !== "string") {
         throw new ConversationError(
@@ -29,19 +47,16 @@ function validateMessageShape(message: Message, index: number): void {
       }
       return;
     case "tool":
-      if (typeof message.toolCallId !== "string" || message.toolCallId.length === 0) {
+      if (!isNonEmptyString(message.toolCallId)) {
         throw new ConversationError(
           ERROR_MESSAGES.conversation.toolCallIdMustBeNonEmptyString(index),
         );
       }
-      if (typeof message.content !== "string") {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.contentMustBeString(index),
-        );
-      }
-      return;
+      return requireStringContent(message, index);
     default:
-      throw new ConversationError(ERROR_MESSAGES.conversation.roleInvalid(index));
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.roleInvalid(index),
+      );
   }
 }
 
@@ -52,18 +67,11 @@ function validateMessageShape(message: Message, index: number): void {
 export function normalizeConversation(messages: readonly Message[]): Message[] {
   const normalized: Message[] = [];
   for (const message of messages) {
-    const previous = normalized[normalized.length - 1];
-    if (
-      message &&
-      typeof message === "object" &&
-      message.role === "user" &&
-      typeof message.content === "string" &&
-      previous?.role === "user" &&
-      typeof previous.content === "string"
-    ) {
+    const previous = normalized.at(-1);
+    if (isUserText(message) && isUserText(previous)) {
       normalized[normalized.length - 1] = {
         role: "user",
-        content: `${previous.content}\n\n${message.content}`,
+        content: mergeUserContent(previous.content, message.content),
       };
     } else {
       normalized.push(message);
@@ -74,15 +82,62 @@ export function normalizeConversation(messages: readonly Message[]): Message[] {
 
 /** Append user content, merging into a trailing user turn when necessary. */
 export function appendUserMessage(messages: Message[], content: string): void {
-  const previous = messages[messages.length - 1];
+  const previous = messages.at(-1);
   if (previous?.role === "user") {
     messages[messages.length - 1] = {
       role: "user",
-      content: `${previous.content}\n\n${content}`,
+      content: mergeUserContent(previous.content, content),
     };
     return;
   }
   messages.push({ role: "user", content });
+}
+
+/** Parse an assistant message's tool calls, wrapping parse errors. */
+function parseAssistantToolCalls(message: Message, index: number): ToolCall[] {
+  if (message.role !== "assistant" || message.toolCalls === undefined) {
+    return [];
+  }
+  try {
+    return parseToolCalls(message.toolCalls, `messages[${index}].toolCalls`);
+  } catch (error) {
+    if (error instanceof InvalidToolCallsError) {
+      throw new ConversationError(error.message, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/** Each tool call must be followed by its matching tool result, in order. */
+function validateToolResults(
+  messages: readonly Message[],
+  assistantIndex: number,
+  toolCalls: readonly ToolCall[],
+): void {
+  for (const [offset, call] of toolCalls.entries()) {
+    const toolIndex = assistantIndex + 1 + offset;
+    const toolMessage = messages[toolIndex];
+    if (!toolMessage) {
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.missingToolResult(toolIndex, call.id),
+      );
+    }
+    validateMessageShape(toolMessage, toolIndex);
+    if (toolMessage.role !== "tool") {
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.expectedToolResult(toolIndex, call.id),
+      );
+    }
+    if (toolMessage.toolCallId !== call.id) {
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.toolCallIdMismatch(
+          toolIndex,
+          call.id,
+          toolMessage.toolCallId,
+        ),
+      );
+    }
+  }
 }
 
 /**
@@ -91,43 +146,30 @@ export function appendUserMessage(messages: Message[], content: string): void {
  */
 export function validateConversation(messages: readonly Message[]): Set<string> {
   const seenToolCallIds = new Set<string>();
-  let index = 0;
 
-  while (index < messages.length) {
+  for (let index = 0; index < messages.length; ) {
     const message = messages[index];
     if (!message) {
-      throw new ConversationError(ERROR_MESSAGES.conversation.messageMissing(index));
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.messageMissing(index),
+      );
     }
     validateMessageShape(message, index);
 
     if (message.role === "tool") {
-      throw new ConversationError(ERROR_MESSAGES.conversation.orphanToolMessage(index));
+      throw new ConversationError(
+        ERROR_MESSAGES.conversation.orphanToolMessage(index),
+      );
     }
     if (message.role !== "assistant") {
       index++;
       continue;
     }
 
-    const content = message.content ?? "";
-    let toolCalls: ToolCall[];
-    if (message.toolCalls === undefined) {
-      toolCalls = [];
-    } else {
-      try {
-        toolCalls = parseToolCalls(
-          message.toolCalls,
-          `messages[${index}].toolCalls`,
-        );
-      } catch (error) {
-        if (error instanceof InvalidToolCallsError) {
-          throw new ConversationError(error.message, { cause: error });
-        }
-        throw error;
-      }
-    }
+    const toolCalls = parseAssistantToolCalls(message, index);
 
     if (toolCalls.length === 0) {
-      if (content.trim().length === 0) {
+      if ((message.content ?? "").trim() === "") {
         throw new ConversationError(
           ERROR_MESSAGES.conversation.assistantMustContainContent(index),
         );
@@ -145,37 +187,7 @@ export function validateConversation(messages: readonly Message[]): Set<string> 
       seenToolCallIds.add(call.id);
     }
 
-    for (let offset = 0; offset < toolCalls.length; offset++) {
-      const call = toolCalls[offset];
-      if (!call) {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.missingToolCall(index, offset),
-        );
-      }
-      const toolIndex = index + 1 + offset;
-      const toolMessage = messages[toolIndex];
-      if (!toolMessage) {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.missingToolResult(toolIndex, call.id),
-        );
-      }
-      validateMessageShape(toolMessage, toolIndex);
-      if (toolMessage.role !== "tool") {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.expectedToolResult(toolIndex, call.id),
-        );
-      }
-      if (toolMessage.toolCallId !== call.id) {
-        throw new ConversationError(
-          ERROR_MESSAGES.conversation.toolCallIdMismatch(
-            toolIndex,
-            call.id,
-            toolMessage.toolCallId,
-          ),
-        );
-      }
-    }
-
+    validateToolResults(messages, index, toolCalls);
     index += 1 + toolCalls.length;
   }
 

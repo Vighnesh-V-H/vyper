@@ -1,27 +1,32 @@
-/** Codes emitted by configuration and environment failures. */
-export type ConfigurationErrorCode =
-  | "configuration/invalid"
-  | "configuration/missing-api-key";
+/** Every error code is namespaced as `namespace/name`. */
+export type ErrorCodeShape = `${string}/${string}`;
 
 /**
  * Stable, namespaced codes for every deliberate vyper failure.
  *
  * Codes are part of the public contract: callers can branch on them without
- * parsing message text. Add a code here first, then add its message and the
+ * parsing message text. Add a member here first, then add its message and the
  * error class that uses it.
  */
-export type ErrorCode =
-  | ConfigurationErrorCode
-  | "agent/invalid"
-  | "conversation/invalid"
-  | "tool-calls/invalid"
-  | "tool-definition/invalid"
-  | "tool-registry/duplicate"
-  | "model-response/invalid"
-  | "context/invalid"
-  | "provider/request"
-  | "provider/response"
-  | "tool/invalid-input"
-  | "tool/execution-failed"
-  | "tool/cancelled"
-  | "tool/timeout";
+export enum ErrorCode {
+  ConfigurationInvalid = "configuration/invalid",
+  MissingApiKey = "configuration/missing-api-key",
+  AgentInvalid = "agent/invalid",
+  ConversationInvalid = "conversation/invalid",
+  ToolCallsInvalid = "tool-calls/invalid",
+  ToolDefinitionInvalid = "tool-definition/invalid",
+  ToolRegistryDuplicate = "tool-registry/duplicate",
+  ModelResponseInvalid = "model-response/invalid",
+  ContextInvalid = "context/invalid",
+  ProviderRequest = "provider/request",
+  ProviderResponse = "provider/response",
+  ToolInvalidInput = "tool/invalid-input",
+  ToolExecutionFailed = "tool/execution-failed",
+  ToolCancelled = "tool/cancelled",
+  ToolTimeout = "tool/timeout",
+}
+
+/** Codes accepted by ConfigurationError. */
+export type ConfigurationErrorCode =
+  | ErrorCode.ConfigurationInvalid
+  | ErrorCode.MissingApiKey;

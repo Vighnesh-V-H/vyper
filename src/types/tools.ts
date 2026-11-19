@@ -1,28 +1,36 @@
+import type { JsonObjectSchema } from "./json-schema";
 import type { UserMessage } from "./message";
 
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-
-export interface JsonSchema {
-  readonly type: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
-  readonly description?: string;
-  readonly properties?: Readonly<Record<string, JsonSchema>>;
-  readonly required?: readonly string[];
-  readonly additionalProperties?: boolean;
-  readonly items?: JsonSchema;
-}
+export type {
+  JsonArraySchema,
+  JsonBooleanSchema,
+  JsonIntegerSchema,
+  JsonNullSchema,
+  JsonNumberSchema,
+  JsonObjectSchema,
+  JsonPrimitive,
+  JsonSchema,
+  JsonSchemaValue,
+  JsonStringSchema,
+  JsonValue,
+} from "./json-schema";
 
 export interface ToolSchema {
   readonly name: string;
   readonly description: string;
-  readonly parameters: JsonSchema;
+  /** Tool arguments are always a JSON object at the wire boundary. */
+  readonly parameters: JsonObjectSchema;
 }
 
-export interface ToolExecutionInput {
+/** A single tool call before execution. Arguments are still untrusted here. */
+export interface ToolExecutionRequest {
   readonly callId: string;
   readonly rootCallId?: string;
   readonly name: string;
   readonly arguments: unknown;
+}
+
+export interface ToolExecutionInput extends ToolExecutionRequest {
   readonly signal: AbortSignal;
 }
 
@@ -61,12 +69,14 @@ export interface ToolCatalog {
   list(): readonly ToolDefinition[];
 }
 
-export type ToolExecutionErrorKind =
-  | "unknown-tool"
-  | "invalid-arguments"
-  | "cancelled"
-  | "timeout"
-  | "execution";
+/** How a tool execution failed. */
+export enum ToolExecutionErrorKind {
+  UnknownTool = "unknown-tool",
+  InvalidArguments = "invalid-arguments",
+  Cancelled = "cancelled",
+  Timeout = "timeout",
+  Execution = "execution",
+}
 
 export interface ToolExecutionResult {
   readonly callId: string;

@@ -1,6 +1,7 @@
 import { ERROR_MESSAGES, ToolRegistrationError } from "../errors";
 import type { ModelTool } from "../types/model";
 import type { ToolCatalog, ToolDefinition } from "../types/tools";
+import { createModelTools } from "./model-tools";
 import { validateToolDefinition } from "./validation";
 
 /**
@@ -59,10 +60,6 @@ export class ToolRegistry implements ToolCatalog {
 
   /** Provider-neutral tool descriptions. Each call returns fresh objects. */
   toModelTools(): ModelTool[] {
-    return [...this.tools.values()].map(({ name, description, parameters }) => ({
-      name,
-      description,
-      inputSchema: parameters,
-    }));
+    return createModelTools(this.tools.values());
   }
 }

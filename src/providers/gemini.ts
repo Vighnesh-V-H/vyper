@@ -5,13 +5,17 @@ import {
 } from "../errors";
 import type { TokenUsage } from "../types/context";
 import type { Message, ToolCall } from "../types/message";
-import type { Model, ModelResponse, ModelTool } from "../types/model";
+import type {
+  Model,
+  ModelRequest,
+  ModelResponse,
+  ModelTool,
+} from "../types/model";
+import { isNonEmptyString } from "../util/is-non-empty-string";
 import { isRecord } from "../util/is-record";
 import { omitUndefined } from "../util/omit-undefined";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-
-type GenerateInput = Parameters<Model["generate"]>[0];
 
 type GeminiPart =
   | { text: string }
@@ -54,7 +58,7 @@ export class GeminiModel implements Model {
     this.#model = options.model;
   }
 
-  async generate(input: GenerateInput): Promise<ModelResponse> {
+  async generate(input: ModelRequest): Promise<ModelResponse> {
     const response = await fetch(this.#endpoint(), {
       method: "POST",
       headers: {
@@ -75,7 +79,7 @@ export class GeminiModel implements Model {
     return `${API_BASE}/${encodeURIComponent(this.#model)}:generateContent`;
   }
 
-  #requestBody(input: GenerateInput): Record<string, unknown> {
+  #requestBody(input: ModelRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       contents: toGeminiContents(input.messages, this.#signatures),
     };
@@ -232,7 +236,7 @@ function readToolCall(
   const call = part.functionCall;
   if (!isRecord(call)) return undefined;
 
-  if (typeof call.name !== "string" || call.name.length === 0) {
+  if (!isNonEmptyString(call.name)) {
     throw new ProviderResponseError(
       ERROR_MESSAGES.gemini.functionCallMissingName,
     );
@@ -245,16 +249,19 @@ function readToolCall(
     );
   }
 
-  const id =
-    typeof call.id === "string" && call.id.length > 0
-      ? call.id
-      : `gemini_${crypto.randomUUID()}`;
+  const id = isNonEmptyString(call.id)
+    ? call.id
+    : `gemini_${crypto.randomUUID()}`;
 
-  if (typeof part.thoughtSignature === "string") {
+  if (isNonEmptyString(part.thoughtSignature)) {
     signatures.set(id, part.thoughtSignature);
   }
 
   return { id, name: call.name, arguments: { ...args } };
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" ? value : 0;
 }
 
 function readUsage(data: Record<string, unknown>): TokenUsage | undefined {
@@ -267,16 +274,11 @@ function readUsage(data: Record<string, unknown>): TokenUsage | undefined {
     return undefined;
   }
 
-  const thoughts =
-    typeof metadata.thoughtsTokenCount === "number" ? metadata.thoughtsTokenCount : 0;
-  const toolUsePrompt =
-    typeof metadata.toolUsePromptTokenCount === "number"
-      ? metadata.toolUsePromptTokenCount
-      : 0;
-
   return {
-    inputTokens: metadata.promptTokenCount + toolUsePrompt,
-    outputTokens: metadata.candidatesTokenCount + thoughts,
+    inputTokens:
+      metadata.promptTokenCount + numberOrZero(metadata.toolUsePromptTokenCount),
+    outputTokens:
+      metadata.candidatesTokenCount + numberOrZero(metadata.thoughtsTokenCount),
   };
 }
 

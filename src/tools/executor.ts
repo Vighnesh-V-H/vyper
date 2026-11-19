@@ -5,21 +5,16 @@ import {
   ToolTimeoutError,
   errorMessage,
 } from "../errors";
+import { ToolExecutionErrorKind } from "../types/tools";
 import type {
   ToolCatalog,
   ToolContext,
-  ToolExecutionErrorKind,
+  ToolExecutionRequest,
   ToolExecutionResult,
 } from "../types/tools";
 import { omitUndefined } from "../util/omit-undefined";
 
-export interface ToolExecutionRequest {
-  readonly callId: string;
-  readonly rootCallId?: string;
-  readonly name: string;
-  /** Untrusted model output. The tool's parse() must validate it. */
-  readonly arguments: unknown;
-}
+export type { ToolExecutionRequest };
 
 export interface ExecuteToolOptions extends ToolContext, ToolExecutionRequest {
   /** One-shot override for the engine-level timeout. */
@@ -54,6 +49,7 @@ function notify<T>(callback: ((value: T) => void) | undefined, value: T): void {
 }
 
 const DEFAULT_MAX_RESULT_CHARS = 100_000;
+const DEFAULT_CONCURRENCY = 1;
 
 /** Bound text to exactly maxChars when truncation is needed. */
 function boundText(text: string, maxChars: number): string {
@@ -63,32 +59,25 @@ function boundText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars - marker.length)}${marker}`;
 }
 
-function normalizeTimeout(value: number | undefined): number | undefined {
+function normalizePositiveNumber(
+  value: number | undefined,
+  message: string,
+): number | undefined {
   if (value === undefined) return undefined;
   if (!Number.isFinite(value) || value <= 0) {
-    throw new ConfigurationError(
-      ERROR_MESSAGES.executor.timeoutMustBePositiveNumber,
-    );
+    throw new ConfigurationError(message);
   }
   return value;
 }
 
-function normalizeMaxResultChars(value: number | undefined): number {
-  if (value === undefined) return DEFAULT_MAX_RESULT_CHARS;
+function normalizePositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  message: string,
+): number {
+  if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value <= 0) {
-    throw new ConfigurationError(
-      ERROR_MESSAGES.executor.maxResultCharsMustBePositiveInteger,
-    );
-  }
-  return value;
-}
-
-function normalizeConcurrency(value: number | undefined): number {
-  if (value === undefined) return 1;
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new ConfigurationError(
-      ERROR_MESSAGES.executor.concurrencyMustBePositiveInteger,
-    );
+    throw new ConfigurationError(message);
   }
   return value;
 }
@@ -114,9 +103,20 @@ export class ToolExecutionEngine {
       );
     }
     this.#catalog = catalog;
-    this.#timeoutMs = normalizeTimeout(options.timeoutMs);
-    this.#maxResultChars = normalizeMaxResultChars(options.maxResultChars);
-    this.#concurrency = normalizeConcurrency(options.concurrency);
+    this.#timeoutMs = normalizePositiveNumber(
+      options.timeoutMs,
+      ERROR_MESSAGES.executor.timeoutMustBePositiveNumber,
+    );
+    this.#maxResultChars = normalizePositiveInteger(
+      options.maxResultChars,
+      DEFAULT_MAX_RESULT_CHARS,
+      ERROR_MESSAGES.executor.maxResultCharsMustBePositiveInteger,
+    );
+    this.#concurrency = normalizePositiveInteger(
+      options.concurrency,
+      DEFAULT_CONCURRENCY,
+      ERROR_MESSAGES.executor.concurrencyMustBePositiveInteger,
+    );
   }
 
   async execute(
@@ -130,7 +130,10 @@ export class ToolExecutionEngine {
       notify(callbacks?.onResult, result);
       return result;
     };
-    const fail = (kind: ToolExecutionErrorKind, content: string): ToolExecutionResult =>
+    const fail = (
+      kind: ToolExecutionErrorKind,
+      content: string,
+    ): ToolExecutionResult =>
       complete({
         callId: request.callId,
         name: request.name,
@@ -139,14 +142,20 @@ export class ToolExecutionEngine {
         errorKind: kind,
         durationMs: Date.now() - startedAt,
       });
+    const cancelled = (): ToolExecutionResult =>
+      fail(
+        ToolExecutionErrorKind.Cancelled,
+        ERROR_MESSAGES.tools.executionCancelled,
+      );
 
-    if (context.signal.aborted) {
-      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
-    }
+    if (context.signal.aborted) return cancelled();
 
     const tool = this.#catalog.get(request.name);
     if (!tool) {
-      return fail("unknown-tool", ERROR_MESSAGES.executor.unknownTool(request.name));
+      return fail(
+        ToolExecutionErrorKind.UnknownTool,
+        ERROR_MESSAGES.executor.unknownTool(request.name),
+      );
     }
 
     let args: unknown;
@@ -154,7 +163,7 @@ export class ToolExecutionEngine {
       args = tool.parse(request.arguments);
     } catch (error) {
       return fail(
-        "invalid-arguments",
+        ToolExecutionErrorKind.InvalidArguments,
         ERROR_MESSAGES.executor.invalidArguments(
           request.name,
           errorMessage(error),
@@ -162,25 +171,29 @@ export class ToolExecutionEngine {
       );
     }
 
-    if (context.signal.aborted) {
-      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
-    }
+    if (context.signal.aborted) return cancelled();
 
-    const timeoutSignal = this.#timeoutMs === undefined ? undefined : AbortSignal.timeout(this.#timeoutMs);
-    const signal = timeoutSignal ? AbortSignal.any([context.signal, timeoutSignal]) : context.signal;
-    const toolContext: ToolContext = {
+    const timeoutSignal =
+      this.#timeoutMs === undefined
+        ? undefined
+        : AbortSignal.timeout(this.#timeoutMs);
+    const signal = timeoutSignal
+      ? AbortSignal.any([context.signal, timeoutSignal])
+      : context.signal;
+    const timedOut = (): boolean =>
+      timeoutSignal?.aborted === true && !context.signal.aborted;
+    const toolContext: ToolContext = omitUndefined({
       cwd: context.cwd,
       signal,
-      ...(context.deferContext ? { deferContext: context.deferContext } : {}),
-      ...(context.concludeTurn ? { concludeTurn: context.concludeTurn } : {}),
-    };
+      deferContext: context.deferContext,
+      concludeTurn: context.concludeTurn,
+    });
 
     let onAbort: (() => void) | undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
       const abort = (): void => {
-        const timedOut = timeoutSignal?.aborted === true && !context.signal.aborted;
         reject(
-          timedOut
+          timedOut()
             ? new ToolTimeoutError(this.#timeoutMs)
             : new ToolCancelledError(),
         );
@@ -195,31 +208,32 @@ export class ToolExecutionEngine {
 
     let result: unknown;
     try {
-      result = await Promise.race([Promise.resolve(tool.execute(args, toolContext)), aborted]);
+      result = await Promise.race([
+        Promise.resolve(tool.execute(args, toolContext)),
+        aborted,
+      ]);
     } catch (error) {
-      const timedOut = timeoutSignal?.aborted === true && !context.signal.aborted;
-      if (timedOut) {
+      if (timedOut()) {
         return fail(
-          "timeout",
+          ToolExecutionErrorKind.Timeout,
           ERROR_MESSAGES.executor.timedOut(this.#timeoutMs),
         );
       }
-      if (context.signal.aborted) {
-        return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
-      }
+      if (context.signal.aborted) return cancelled();
       return fail(
-        "execution",
+        ToolExecutionErrorKind.Execution,
         ERROR_MESSAGES.executor.failed(request.name, errorMessage(error)),
       );
     } finally {
       if (onAbort) signal.removeEventListener("abort", onAbort);
     }
 
-    if (context.signal.aborted) {
-      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
-    }
-    if (timeoutSignal?.aborted === true) {
-      return fail("timeout", ERROR_MESSAGES.executor.timedOut(this.#timeoutMs));
+    if (context.signal.aborted) return cancelled();
+    if (timedOut()) {
+      return fail(
+        ToolExecutionErrorKind.Timeout,
+        ERROR_MESSAGES.executor.timedOut(this.#timeoutMs),
+      );
     }
 
     let rendered: unknown;
@@ -227,7 +241,7 @@ export class ToolExecutionEngine {
       rendered = tool.render(args, result);
     } catch (error) {
       return fail(
-        "execution",
+        ToolExecutionErrorKind.Execution,
         ERROR_MESSAGES.executor.renderFailed(
           request.name,
           errorMessage(error),
@@ -236,7 +250,7 @@ export class ToolExecutionEngine {
     }
     if (typeof rendered !== "string") {
       return fail(
-        "execution",
+        ToolExecutionErrorKind.Execution,
         ERROR_MESSAGES.executor.renderMustReturnString(request.name),
       );
     }

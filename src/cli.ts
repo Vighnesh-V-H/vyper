@@ -4,6 +4,7 @@ import { ERROR_MESSAGES, MissingApiKeyError } from "./errors";
 import { GeminiModel } from "./providers/gemini";
 import { clockTool } from "./tools/builtin/clock";
 import { createToolRegistry } from "./tools/discovery";
+import { AgentEventType, AgentStatus } from "./types/agent";
 import type { AgentEvent, AgentResult } from "./types/agent";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
@@ -55,37 +56,37 @@ export async function main(): Promise<void> {
 
 function printEvent(event: AgentEvent): void {
   switch (event.type) {
-    case "tool-start":
+    case AgentEventType.ToolStart:
       console.error(`tool: ${event.name}`);
       break;
-    case "tool-result":
+    case AgentEventType.ToolResult:
       console.error(
         `tool: ${event.result.name} ${event.result.isError ? "failed" : "done"} (${event.result.durationMs}ms)`,
       );
       break;
-    case "warning":
+    case AgentEventType.Warning:
       console.error(`warning (${event.stage}): ${event.error.message}`);
       break;
-    case "error":
+    case AgentEventType.Error:
       console.error(`error (${event.stage}): ${event.error.message}`);
       break;
   }
 }
 
 function reportResult(result: AgentResult): void {
-  if (result.status === "error") {
+  if (result.status === AgentStatus.Error) {
     console.error(`Agent failed at ${result.stage}: ${result.error.message}`);
     process.exitCode = 1;
     return;
   }
-  if (result.status === "aborted") {
+  if (result.status === AgentStatus.Aborted) {
     console.error(ERROR_MESSAGES.agent.runAborted);
     process.exitCode = 130;
     return;
   }
 
   console.log(result.output);
-  if (result.status === "max-steps") {
+  if (result.status === AgentStatus.MaxSteps) {
     console.error(`Stopped after ${result.steps} model calls.`);
     process.exitCode = 1;
   }

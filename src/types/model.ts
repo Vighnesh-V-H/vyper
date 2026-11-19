@@ -1,39 +1,73 @@
+import type { TokenUsage } from "./context";
+import type { JsonObjectSchema } from "./json-schema";
 import type { Message, ToolCall } from "./message";
-import type { JsonSchema } from "./tools";
 
 export interface ModelTool {
   name: string;
   description: string;
-  inputSchema: JsonSchema;
+  inputSchema: JsonObjectSchema;
+}
+
+export interface ModelRequest {
+  messages: Message[];
+  tools: ModelTool[];
+  signal?: AbortSignal;
 }
 
 export interface ModelResponse {
   text?: string;
   toolCalls: ToolCall[];
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: TokenUsage;
+}
+
+/** Kinds of incremental output a provider may stream. */
+export enum ModelStreamChunkType {
+  TextDelta = "text-delta",
+  ToolCallDelta = "tool-call-delta",
+  ToolCallDone = "tool-call-done",
+  Usage = "usage",
+  Done = "done",
+}
+
+export interface TextDeltaChunk {
+  type: ModelStreamChunkType.TextDelta;
+  text: string;
+}
+
+export interface ToolCallDeltaChunk {
+  type: ModelStreamChunkType.ToolCallDelta;
+  toolCallId: string;
+  name?: string;
+  argumentsDelta?: string;
+}
+
+export interface ToolCallDoneChunk {
+  type: ModelStreamChunkType.ToolCallDone;
+  toolCall: ToolCall;
+}
+
+export interface UsageChunk {
+  type: ModelStreamChunkType.Usage;
+  usage: TokenUsage;
+}
+
+export interface DoneChunk {
+  type: ModelStreamChunkType.Done;
 }
 
 export type ModelStreamChunk =
-  | { type: "text-delta"; text: string }
-  | { type: "tool-call-delta"; toolCallId: string; name?: string; argumentsDelta?: string }
-  | { type: "tool-call-done"; toolCall: ToolCall }
-  | { type: "usage"; usage: { inputTokens: number; outputTokens: number } }
-  | { type: "done" };
+  | TextDeltaChunk
+  | ToolCallDeltaChunk
+  | ToolCallDoneChunk
+  | UsageChunk
+  | DoneChunk;
 
 export interface Model {
   /**
    * Provider adapters own retries, backoff, and transport error normalization.
    * The agent loop fails fast on model errors.
    */
-  generate(input: {
-    messages: Message[];
-    tools: ModelTool[];
-    signal?: AbortSignal;
-  }): Promise<ModelResponse>;
+  generate(input: ModelRequest): Promise<ModelResponse>;
 
-  streamText?(input: {
-    messages: Message[];
-    tools: ModelTool[];
-    signal?: AbortSignal;
-  }): AsyncIterable<ModelStreamChunk>;
+  streamText?(input: ModelRequest): AsyncIterable<ModelStreamChunk>;
 }

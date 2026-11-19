@@ -1,5 +1,6 @@
 import { ERROR_MESSAGES, InvalidToolCallsError } from "../errors";
 import type { ToolCall } from "../types/message";
+import { isNonEmptyString } from "../util/is-non-empty-string";
 import { isRecord } from "../util/is-record";
 
 function parseToolCall(value: unknown, label: string): ToolCall {
@@ -8,12 +9,12 @@ function parseToolCall(value: unknown, label: string): ToolCall {
   }
 
   const { id, name, arguments: args } = value;
-  if (typeof id !== "string" || id.length === 0) {
+  if (!isNonEmptyString(id)) {
     throw new InvalidToolCallsError(
       ERROR_MESSAGES.toolCalls.idMustBeNonEmptyString(label),
     );
   }
-  if (typeof name !== "string" || name.length === 0) {
+  if (!isNonEmptyString(name)) {
     throw new InvalidToolCallsError(
       ERROR_MESSAGES.toolCalls.nameMustBeNonEmptyString(label),
     );

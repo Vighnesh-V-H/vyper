@@ -7,8 +7,8 @@ import {
   ToolRegistrationError,
   toError,
 } from "../errors";
+import { AgentErrorStage, AgentEventType, AgentStatus } from "../types/agent";
 import type {
-  AgentErrorStage,
   AgentEvent,
   AgentEventHandler,
   AgentOptions,
@@ -16,12 +16,15 @@ import type {
   AgentRunOptions,
 } from "../types/agent";
 import type { ContextManager, PreparedContext, TokenUsage } from "../types/context";
-import type { Message, UserMessage } from "../types/message";
+import type { Message, ToolCall, UserMessage } from "../types/message";
 import type { Model, ModelResponse, ModelTool } from "../types/model";
+import { ToolExecutionErrorKind } from "../types/tools";
 import type { ToolCatalog, ToolDefinition, ToolExecutionResult } from "../types/tools";
 import { ToolExecutionEngine } from "../tools/executor";
 import type { ToolExecutionEngineOptions } from "../tools/executor";
+import { createModelTools } from "../tools/model-tools";
 import { validateToolDefinition } from "../tools/validation";
+import { isNonEmptyString } from "../util/is-non-empty-string";
 import { omitUndefined } from "../util/omit-undefined";
 import {
   appendUserMessage,
@@ -56,11 +59,7 @@ function snapshotTools(catalog: ToolCatalog): ToolSnapshot {
       get: (name) => tools.get(name),
       list: () => [...tools.values()],
     },
-    modelTools: [...tools.values()].map(({ name, description, parameters }) => ({
-      name,
-      description,
-      inputSchema: parameters,
-    })),
+    modelTools: createModelTools(tools.values()),
   };
 }
 
@@ -77,25 +76,21 @@ function cloneResponseForEvent(response: ModelResponse): ModelResponse {
 }
 
 /**
- * Tool results are flat, primitive-only records. A shallow copy fully isolates
- * event handlers from the result later written into conversation history.
+ * Tool results are flat, primitive-only records, so a shallow copy fully
+ * isolates event handlers from the result later written into conversation
+ * history.
  */
 function cloneToolResultForEvent(result: ToolExecutionResult): ToolExecutionResult {
-  return omitUndefined({
-    callId: result.callId,
-    name: result.name,
-    content: result.content,
-    isError: result.isError,
-    errorKind: result.errorKind,
-    durationMs: result.durationMs,
-  });
+  return { ...result };
 }
 
 function syntheticToolResult(
   callId: string,
   name: string,
   content: string,
-  errorKind: "cancelled" | "execution",
+  errorKind:
+    | ToolExecutionErrorKind.Cancelled
+    | ToolExecutionErrorKind.Execution,
 ): ToolExecutionResult {
   return { callId, name, content, isError: true, errorKind, durationMs: 0 };
 }
@@ -129,7 +124,7 @@ function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
   if (typeof options.instructions !== "string") {
     throw new ConfigurationError(ERROR_MESSAGES.agent.instructionsMustBeString);
   }
-  if (typeof options.cwd !== "string" || options.cwd.length === 0) {
+  if (!isNonEmptyString(options.cwd)) {
     throw new ConfigurationError(ERROR_MESSAGES.agent.cwdMustBeNonEmptyString);
   }
   if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
@@ -320,30 +315,68 @@ export class Agent {
       }
     };
     const finish = (result: AgentResult): AgentResult => {
-      emit({ type: "stop", status: result.status, steps: result.steps });
+      emit({
+        type: AgentEventType.Stop,
+        status: result.status,
+        steps: result.steps,
+      });
       return result;
     };
-    const fail = (stage: AgentErrorStage, error: Error, errorStep = steps): AgentResult => {
-      const result: AgentResult = {
-        status: "error",
+    const resultBase = (output: string) => ({
+      messages: history,
+      output,
+      steps,
+      usage,
+    });
+    const completed = (output: string): AgentResult =>
+      finish({ status: AgentStatus.Completed, ...resultBase(output) });
+    const maxStepsReached = (output: string): AgentResult =>
+      finish({ status: AgentStatus.MaxSteps, ...resultBase(output) });
+    const fail = (
+      stage: AgentErrorStage,
+      error: Error,
+      errorStep = steps,
+    ): AgentResult => {
+      emit({ type: AgentEventType.Error, step: errorStep, stage, error });
+      return finish({
+        status: AgentStatus.Error,
         stage,
         error,
-        messages: history,
-        output: error.message,
-        steps,
-        usage,
-      };
-      emit({ type: "error", step: errorStep, stage, error });
-      return finish(result);
+        ...resultBase(error.message),
+      });
     };
     const aborted = (): AgentResult =>
       finish({
-        status: "aborted",
-        messages: history,
-        output: ERROR_MESSAGES.agent.runAborted,
-        steps,
-        usage,
+        status: AgentStatus.Aborted,
+        ...resultBase(ERROR_MESSAGES.agent.runAborted),
       });
+    const appendSyntheticToolResults = (
+      step: number,
+      calls: readonly ToolCall[],
+      content: string,
+      errorKind:
+        | ToolExecutionErrorKind.Cancelled
+        | ToolExecutionErrorKind.Execution,
+    ): void => {
+      for (const call of calls) {
+        const result = syntheticToolResult(
+          call.id,
+          call.name,
+          content,
+          errorKind,
+        );
+        history.push({
+          role: "tool",
+          toolCallId: call.id,
+          content: result.content,
+        });
+        emit({
+          type: AgentEventType.ToolResult,
+          step,
+          result: cloneToolResultForEvent(result),
+        });
+      }
+    };
 
     if (signal.aborted) return aborted();
 
@@ -353,7 +386,7 @@ export class Agent {
       snapshot = snapshotTools(this.tools);
       engine = new ToolExecutionEngine(snapshot.catalog, this.engineOptions);
     } catch (error) {
-      return fail("configuration", toError(error));
+      return fail(AgentErrorStage.Configuration, toError(error));
     }
     const modelTools = snapshot.modelTools;
 
@@ -362,7 +395,7 @@ export class Agent {
 
       const step = steps + 1;
       const finalStep = step === this.maxSteps;
-      emit({ type: "step-start", step });
+      emit({ type: AgentEventType.StepStart, step });
 
       let stepContext: PreparedStep;
       try {
@@ -376,13 +409,13 @@ export class Agent {
         );
       } catch (error) {
         if (signal.aborted) return aborted();
-        return fail("context", toError(error), step);
+        return fail(AgentErrorStage.Context, toError(error), step);
       }
 
       history = stepContext.messages;
       usedToolCallIds = stepContext.toolCallIds;
       emit({
-        type: "context-prepared",
+        type: AgentEventType.ContextPrepared,
         step,
         compacted: stepContext.compacted,
         tokensEstimated: stepContext.tokensEstimated,
@@ -402,7 +435,7 @@ export class Agent {
         });
       } catch (error) {
         if (signal.aborted) return aborted();
-        return fail("model", toError(error));
+        return fail(AgentErrorStage.Model, toError(error));
       }
 
       const billedUsage = readResponseUsage(rawResponse);
@@ -417,13 +450,13 @@ export class Agent {
       try {
         response = validateModelResponse(rawResponse);
       } catch (error) {
-        return fail("response", toError(error));
+        return fail(AgentErrorStage.Response, toError(error));
       }
 
       for (const call of response.toolCalls) {
         if (usedToolCallIds.has(call.id)) {
           return fail(
-            "response",
+            AgentErrorStage.Response,
             new ConversationError(
               ERROR_MESSAGES.conversation.duplicateToolCallId(call.id),
             ),
@@ -435,14 +468,23 @@ export class Agent {
         try {
           this.context.observe(response.usage, [...history]);
         } catch (error) {
-          emit({ type: "warning", step, stage: "context", error: toError(error) });
+          emit({
+            type: AgentEventType.Warning,
+            step,
+            stage: AgentErrorStage.Context,
+            error: toError(error),
+          });
         }
       }
 
       // Cloning keeps event handlers from mutating conversation state. emit()
       // already swallows handler errors, but cloning itself is best effort too.
       try {
-        emit({ type: "model-response", step, response: cloneResponseForEvent(response) });
+        emit({
+          type: AgentEventType.ModelResponse,
+          step,
+          response: cloneResponseForEvent(response),
+        });
       } catch {
         // Observability must not fail the run.
       }
@@ -455,34 +497,23 @@ export class Agent {
           ...(text.length > 0 ? { content: text } : {}),
         });
         if (finalStep) {
-          return finish({
-            status: "max-steps",
-            messages: history,
-            output: text,
-            steps,
-            usage,
-          });
+          return maxStepsReached(text);
         }
-        return finish({ status: "completed", messages: history, output: text, steps, usage });
+        return completed(text);
       }
 
       if (finalStep) {
         emit({
-          type: "warning",
+          type: AgentEventType.Warning,
           step,
-          stage: "response",
+          stage: AgentErrorStage.Response,
           error: new AgentError(ERROR_MESSAGES.agent.finalStepRequestedTools),
         });
-        return finish({
-          status: "max-steps",
-          messages: history,
-          output:
-            text.trim().length > 0
-              ? text
-              : ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
-          steps,
-          usage,
-        });
+        return maxStepsReached(
+          text.trim().length > 0
+            ? text
+            : ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
+        );
       }
 
       for (const call of response.toolCalls) usedToolCallIds.add(call.id);
@@ -520,34 +551,39 @@ export class Agent {
           },
           {
             onStart: (request) =>
-              emit({ type: "tool-start", step, callId: request.callId, name: request.name }),
+              emit({
+                type: AgentEventType.ToolStart,
+                step,
+                callId: request.callId,
+                name: request.name,
+              }),
             onResult: (result) =>
-              emit({ type: "tool-result", step, result: cloneToolResultForEvent(result) }),
+              emit({
+                type: AgentEventType.ToolResult,
+                step,
+                result: cloneToolResultForEvent(result),
+              }),
           },
         );
       } catch (error) {
         const failure = toError(error);
         if (signal.aborted) {
-          for (const call of response.toolCalls) {
-            const result = syntheticToolResult(
-              call.id,
-              call.name,
-              ERROR_MESSAGES.tools.executionCancelled,
-              "cancelled",
-            );
-            history.push({ role: "tool", toolCallId: call.id, content: result.content });
-            emit({ type: "tool-result", step, result: cloneToolResultForEvent(result) });
-          }
+          appendSyntheticToolResults(
+            step,
+            response.toolCalls,
+            ERROR_MESSAGES.tools.executionCancelled,
+            ToolExecutionErrorKind.Cancelled,
+          );
           return aborted();
         }
 
-        const content = ERROR_MESSAGES.agent.toolExecutionFailed(failure.message);
-        for (const call of response.toolCalls) {
-          const result = syntheticToolResult(call.id, call.name, content, "execution");
-          history.push({ role: "tool", toolCallId: call.id, content: result.content });
-          emit({ type: "tool-result", step, result: cloneToolResultForEvent(result) });
-        }
-        return fail("tools", failure);
+        appendSyntheticToolResults(
+          step,
+          response.toolCalls,
+          ERROR_MESSAGES.agent.toolExecutionFailed(failure.message),
+          ToolExecutionErrorKind.Execution,
+        );
+        return fail(AgentErrorStage.Tools, failure);
       }
 
       // validateModelResponse guarantees unique call ids, so this map cannot
@@ -561,26 +597,24 @@ export class Agent {
             call.id,
             call.name,
             ERROR_MESSAGES.agent.missingToolResult,
-            "execution",
+            ToolExecutionErrorKind.Execution,
           );
-          emit({ type: "tool-result", step, result: cloneToolResultForEvent(result) });
+          emit({
+            type: AgentEventType.ToolResult,
+            step,
+            result: cloneToolResultForEvent(result),
+          });
         }
         history.push({ role: "tool", toolCallId: call.id, content: result.content });
       }
       for (const message of deferred) appendUserMessage(history, message.content);
 
       if (signal.aborted) return aborted();
-      if (concluded) {
-        return finish({ status: "completed", messages: history, output: text, steps, usage });
-      }
+      if (concluded) return completed(text);
     }
 
-    return finish({
-      status: "max-steps",
-      messages: history,
-      output: ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
-      steps,
-      usage,
-    });
+    return maxStepsReached(
+      ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
+    );
   }
 }

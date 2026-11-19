@@ -151,6 +151,8 @@ export const ERROR_MESSAGES = {
       `Invalid ${label}: parameters must be a JSON schema object`,
     parametersTypeMustBeObject: (label: string): string =>
       `Invalid ${label}: parameters.type must be "object"`,
+    parametersMustBeValidSchema: (label: string): string =>
+      `Invalid ${label}: parameters and nested properties must be valid JSON schemas`,
     propertiesMustBeObject: (label: string): string =>
       `Invalid ${label}: parameters.properties must be an object`,
     parameterNamesMustNotBeEmpty: (label: string): string =>

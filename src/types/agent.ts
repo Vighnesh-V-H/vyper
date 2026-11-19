@@ -5,12 +5,85 @@ import type { ToolCatalog, ToolExecutionResult } from "./tools";
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
-export type AgentErrorStage =
-  | "configuration"
-  | "context"
-  | "model"
-  | "response"
-  | "tools";
+/** Stages at which an agent run can fail or emit a warning. */
+export enum AgentErrorStage {
+  Configuration = "configuration",
+  Context = "context",
+  Model = "model",
+  Response = "response",
+  Tools = "tools",
+}
+
+/** Terminal status of an agent run. */
+export enum AgentStatus {
+  Completed = "completed",
+  MaxSteps = "max-steps",
+  Aborted = "aborted",
+  Error = "error",
+}
+
+/** Kinds of observability events emitted during a run. */
+export enum AgentEventType {
+  StepStart = "step-start",
+  ContextPrepared = "context-prepared",
+  ModelResponse = "model-response",
+  ToolStart = "tool-start",
+  ToolResult = "tool-result",
+  Warning = "warning",
+  Error = "error",
+  Stop = "stop",
+}
+
+export interface AgentStepStartEvent {
+  type: AgentEventType.StepStart;
+  step: number;
+}
+
+export interface AgentContextPreparedEvent {
+  type: AgentEventType.ContextPrepared;
+  step: number;
+  compacted: boolean;
+  tokensEstimated: number;
+}
+
+export interface AgentModelResponseEvent {
+  type: AgentEventType.ModelResponse;
+  step: number;
+  response: ModelResponse;
+}
+
+export interface AgentToolStartEvent {
+  type: AgentEventType.ToolStart;
+  step: number;
+  callId: string;
+  name: string;
+}
+
+export interface AgentToolResultEvent {
+  type: AgentEventType.ToolResult;
+  step: number;
+  result: ToolExecutionResult;
+}
+
+export interface AgentWarningEvent {
+  type: AgentEventType.Warning;
+  step: number;
+  stage: AgentErrorStage;
+  error: Error;
+}
+
+export interface AgentErrorEvent {
+  type: AgentEventType.Error;
+  step: number;
+  stage: AgentErrorStage;
+  error: Error;
+}
+
+export interface AgentStopEvent {
+  type: AgentEventType.Stop;
+  status: AgentStatus;
+  steps: number;
+}
 
 /**
  * Observability events for a run. Handlers are best-effort: a throwing handler
@@ -18,21 +91,30 @@ export type AgentErrorStage =
  * responses and tool results) are copies, so handlers cannot corrupt history.
  */
 export type AgentEvent =
-  | { type: "step-start"; step: number }
-  | {
-      type: "context-prepared";
-      step: number;
-      compacted: boolean;
-      tokensEstimated: number;
-    }
-  | { type: "model-response"; step: number; response: ModelResponse }
-  | { type: "tool-start"; step: number; callId: string; name: string }
-  | { type: "tool-result"; step: number; result: ToolExecutionResult }
-  | { type: "warning"; step: number; stage: AgentErrorStage; error: Error }
-  | { type: "error"; step: number; stage: AgentErrorStage; error: Error }
-  | { type: "stop"; status: AgentResult["status"]; steps: number };
+  | AgentStepStartEvent
+  | AgentContextPreparedEvent
+  | AgentModelResponseEvent
+  | AgentToolStartEvent
+  | AgentToolResultEvent
+  | AgentWarningEvent
+  | AgentErrorEvent
+  | AgentStopEvent;
 
-interface AgentResultBase {
+/** Payloads indexed by discriminant, for typed dispatch tables and handlers. */
+export type AgentEventMap = {
+  [TType in AgentEventType]: Extract<AgentEvent, { type: TType }>;
+};
+
+/** The exact payload emitted for one event type. */
+export type AgentEventOfType<TType extends AgentEventType> =
+  AgentEventMap[TType];
+
+/** A callback narrowed to a single event variant. */
+export type AgentEventHandlerFor<TType extends AgentEventType> = (
+  event: AgentEventOfType<TType>,
+) => void;
+
+export interface AgentResultBase {
   /** Conversation after the run. Always valid: every tool call has a result. */
   readonly messages: readonly Message[];
   /**
@@ -46,15 +128,38 @@ interface AgentResultBase {
   readonly usage: TokenUsage;
 }
 
+export interface AgentCompletedResult extends AgentResultBase {
+  readonly status: AgentStatus.Completed;
+}
+
+export interface AgentMaxStepsResult extends AgentResultBase {
+  readonly status: AgentStatus.MaxSteps;
+}
+
+export interface AgentAbortedResult extends AgentResultBase {
+  readonly status: AgentStatus.Aborted;
+}
+
+export interface AgentFailedResult extends AgentResultBase {
+  readonly status: AgentStatus.Error;
+  readonly stage: AgentErrorStage;
+  readonly error: Error;
+}
+
 export type AgentResult =
-  | ({ readonly status: "completed" } & AgentResultBase)
-  | ({ readonly status: "max-steps" } & AgentResultBase)
-  | ({ readonly status: "aborted" } & AgentResultBase)
-  | ({
-      readonly status: "error";
-      readonly stage: AgentErrorStage;
-      readonly error: Error;
-    } & AgentResultBase);
+  | AgentCompletedResult
+  | AgentMaxStepsResult
+  | AgentAbortedResult
+  | AgentFailedResult;
+
+/** Result variants indexed by status, preserving the discriminated union. */
+export type AgentResultMap = {
+  [TStatus in AgentStatus]: Extract<AgentResult, { status: TStatus }>;
+};
+
+/** The exact result variant for one terminal status. */
+export type AgentResultOfStatus<TStatus extends AgentStatus> =
+  AgentResultMap[TStatus];
 
 export interface AgentRunOptions {
   readonly signal?: AbortSignal;

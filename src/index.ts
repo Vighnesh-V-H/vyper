@@ -18,7 +18,13 @@ export type {
 } from "./tools/executor";
 export { builtinTools, createToolRegistry, discoverTools } from "./tools/discovery";
 export type { ToolDiscoveryOptions } from "./tools/discovery";
-export { validateToolDefinition, TOOL_NAME_PATTERN } from "./tools/validation";
+export {
+  isJsonSchema,
+  validateToolDefinition,
+  TOOL_NAME_PATTERN,
+} from "./tools/validation";
+export { defineTool } from "./tools/define-tool";
+export type { DefinedTool, DefineToolOptions } from "./tools/define-tool";
 export { read } from "./tools/builtin/read";
 export { grep } from "./tools/builtin/grep";
 export { bash } from "./tools/builtin/bash";

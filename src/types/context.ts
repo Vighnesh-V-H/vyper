@@ -33,7 +33,12 @@ export interface ContextBudget {
   compactThreshold?: number;
 }
 
-export type CompactionTrigger = "threshold" | "overflow" | "manual";
+/** Why a context compaction was requested. */
+export enum CompactionTrigger {
+  Threshold = "threshold",
+  Overflow = "overflow",
+  Manual = "manual",
+}
 
 export interface CompactionDetails {
   readFiles?: string[];
@@ -69,6 +74,12 @@ export interface PreparedContext {
   tokensEstimated: number;
 }
 
+export interface CompactInput {
+  messages: Message[];
+  trigger: CompactionTrigger;
+  signal?: AbortSignal;
+}
+
 export interface ContextManager {
   /**
    * Called immediately before every model call.
@@ -90,11 +101,7 @@ export interface ContextManager {
    * Optional explicit compaction. The agent loop calls this on overflow
    * or when the user invokes /compact.
    */
-  compact?(input: {
-    messages: Message[];
-    trigger: CompactionTrigger;
-    signal?: AbortSignal;
-  }): Promise<CompactionResult>;
+  compact?(input: CompactInput): Promise<CompactionResult>;
 }
 
 export interface SummarizeInput {
@@ -103,17 +110,19 @@ export interface SummarizeInput {
   signal?: AbortSignal;
 }
 
+export interface SummarizeResult {
+  summary: string;
+  details?: CompactionDetails;
+}
+
 export interface Summarizer {
-  summarize(input: SummarizeInput): Promise<{
-    summary: string;
-    details?: CompactionDetails;
-  }>;
+  summarize(input: SummarizeInput): Promise<SummarizeResult>;
 }
 
 export interface ContextCheckpoint {
   id: string;
   summary: string;
-  /** Index into the pre-compaccction message array of the first message kept verbatim. */
+  /** Index into the pre-compaction message array of the first message kept verbatim. */
   firstKeptMessageIndex: number;
   createdAt: number;
   details?: CompactionDetails;
@@ -124,16 +133,48 @@ export interface ContextStore {
   latest(sessionId: string): Promise<ContextCheckpoint | null>;
 }
 
+interface ContextSourceBase {
+  content: string;
+  priority: number;
+}
+
+export interface ProjectFileContextSource extends ContextSourceBase {
+  src: "project-file";
+  path: string;
+}
+
+export interface MemoryContextSource extends ContextSourceBase {
+  src: "memory";
+  id: string;
+}
+
+export interface RetrievalContextSource extends ContextSourceBase {
+  src: "retrieval";
+  uri: string;
+}
+
+export interface RuntimeContextSource extends ContextSourceBase {
+  src: "runtime";
+  key: string;
+  value: string;
+}
+
 export type ContextSource =
-  | { src: "project-file"; path: string; content: string; priority: number }
-  | { src: "memory"; id: string; content: string; priority: number }
-  | { src: "retrieval"; uri: string; content: string; priority: number }
-  | { src: "runtime"; key: string; value: string; priority: number };
+  | ProjectFileContextSource
+  | MemoryContextSource
+  | RetrievalContextSource
+  | RuntimeContextSource;
+
+export interface AssembleContextInput {
+  cwd: string;
+  sources: ContextSource[];
+  signal?: AbortSignal;
+}
+
+export interface AssembledContext {
+  system: string;
+}
 
 export interface ContextAssembler {
-  assemble(input: {
-    cwd: string;
-    sources: ContextSource[];
-    signal?: AbortSignal;
-  }): Promise<{ system: string }>;
+  assemble(input: AssembleContextInput): Promise<AssembledContext>;
 }

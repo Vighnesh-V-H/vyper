@@ -4,24 +4,39 @@ export type {
   ExecuteToolOptions,
   ToolExecutionCallbacks,
   ToolExecutionEngineOptions,
-  ToolExecutionRequest,
 } from "./executor";
 export { builtinTools, createToolRegistry, discoverTools } from "./discovery";
 export type { ToolDiscoveryOptions } from "./discovery";
-export { validateToolDefinition, TOOL_NAME_PATTERN } from "./validation";
+export {
+  isJsonSchema,
+  validateToolDefinition,
+  TOOL_NAME_PATTERN,
+} from "./validation";
+export { defineTool } from "./define-tool";
+export type { DefinedTool, DefineToolOptions } from "./define-tool";
 export { read } from "./builtin/read";
 export { grep } from "./builtin/grep";
 export { bash } from "./builtin/bash";
+
+export { ToolExecutionErrorKind } from "../types/tools";
 export type {
+  JsonArraySchema,
+  JsonBooleanSchema,
+  JsonIntegerSchema,
+  JsonNullSchema,
+  JsonNumberSchema,
+  JsonObjectSchema,
   JsonPrimitive,
-  JsonValue,
   JsonSchema,
+  JsonSchemaValue,
+  JsonStringSchema,
+  JsonValue,
   ToolSchema,
   ToolDefinition,
   ToolCatalog,
   ToolContext,
-  ToolExecutionErrorKind,
   ToolExecutionInput,
+  ToolExecutionRequest,
   ToolExecutionResult,
   ToolRunContext,
 } from "../types/tools";
