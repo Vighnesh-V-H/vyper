@@ -1,7 +1,8 @@
 import { Agent } from "./agent/agent";
 import { WindowedContext } from "./context/windowed";
+import { ERROR_MESSAGES, MissingApiKeyError } from "./errors";
 import { GeminiModel } from "./providers/gemini";
-import { clockTool } from "./tools/clock";
+import { clockTool } from "./tools/builtin/clock";
 import { createToolRegistry } from "./tools/discovery";
 import type { AgentEvent, AgentResult } from "./types/agent";
 
@@ -13,9 +14,10 @@ const MAX_CONTEXT_TOKENS = 24_000;
 const KEEP_RECENT_MESSAGES = 40;
 
 export async function main(): Promise<void> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
+  const apiKeyVariable = "GOOGLE_GENERATIVE_AI_API_KEY";
+  const apiKey = process.env[apiKeyVariable]?.trim();
   if (apiKey === undefined || apiKey.length === 0) {
-    throw new Error("GOOGLE_GENERATIVE_AI_API_KEY is not set. Add it to .env first.");
+    throw new MissingApiKeyError(apiKeyVariable);
   }
 
   const prompt = process.argv.slice(2).join(" ").trim() || DEFAULT_PROMPT;
@@ -77,7 +79,7 @@ function reportResult(result: AgentResult): void {
     return;
   }
   if (result.status === "aborted") {
-    console.error("Run aborted.");
+    console.error(ERROR_MESSAGES.agent.runAborted);
     process.exitCode = 130;
     return;
   }

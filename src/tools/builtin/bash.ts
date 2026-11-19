@@ -1,5 +1,11 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import {
+  ERROR_MESSAGES,
+  ToolCancelledError,
+  ToolExecutionError,
+  ToolInputError,
+} from "../../errors";
 import type { JsonSchema, ToolDefinition } from "../../types/tools";
 
 interface BashArgs { command: string }
@@ -12,9 +18,13 @@ const parameters: JsonSchema = {
 const run = promisify(exec);
 const SAFE_COMMANDS = new Set(["ls", "pwd", "which", "find", "head", "tail", "wc", "git"]);
 function parse(input: unknown): BashArgs {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Arguments must be an object");
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.argumentsMustBeObject);
+  }
   const command = (input as Record<string, unknown>).command;
-  if (typeof command !== "string" || !command.trim()) throw new Error("command must be a non-empty string");
+  if (typeof command !== "string" || !command.trim()) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.commandMustBeNonEmptyString);
+  }
   return { command: command.trim() };
 }
 function isSafe(command: string): boolean {
@@ -30,16 +40,25 @@ export const bash: ToolDefinition<BashArgs, string> = {
   parameters,
   parse,
   async execute({ command }, { cwd, signal }) {
-    if (!isSafe(command)) throw new Error("Command requires approval or is not in the automatic allowlist");
-    if (signal.aborted) throw new Error("Tool execution cancelled");
+    if (!isSafe(command)) {
+      throw new ToolExecutionError(ERROR_MESSAGES.tools.commandRequiresApproval);
+    }
+    if (signal.aborted) throw new ToolCancelledError();
     try {
       const { stdout, stderr } = await run(command, { cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024, signal });
       return `${stdout}${stderr ? `${stdout ? "\n" : ""}${stderr}` : ""}`.trimEnd() || "(no output)";
     } catch (error) {
       const failure = error as Error & { code?: number | string; stdout?: string; stderr?: string };
-      if (signal.aborted) throw new Error("Tool execution cancelled");
+      if (signal.aborted) throw new ToolCancelledError();
       const output = [failure.stdout, failure.stderr].filter((part): part is string => typeof part === "string" && part.length > 0).join("\n");
-      throw new Error(`Command failed${failure.code === undefined ? "" : ` (exit ${failure.code})`}${output ? `:\n${output}` : `: ${failure.message}`}`);
+      throw new ToolExecutionError(
+        ERROR_MESSAGES.tools.commandFailed(
+          failure.code,
+          output,
+          failure.message,
+        ),
+        { cause: failure },
+      );
     }
   },
   render: (_args, result) => result,

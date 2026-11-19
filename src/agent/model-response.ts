@@ -1,16 +1,14 @@
+import {
+  ERROR_MESSAGES,
+  InvalidModelResponseError,
+  InvalidToolCallsError,
+} from "../errors";
 import type { TokenUsage } from "../types/context";
 import type { ToolCall } from "../types/message";
 import type { ModelResponse } from "../types/model";
 import { isRecord } from "../util/is-record";
 import { omitUndefined } from "../util/omit-undefined";
-import { InvalidToolCallsError, parseToolCalls } from "./tool-calls";
-
-export class InvalidModelResponseError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidModelResponseError";
-  }
-}
+import { parseToolCalls } from "./tool-calls";
 
 function isTokenCount(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -38,11 +36,15 @@ export function readResponseUsage(value: unknown): TokenUsage | undefined {
  * a half-written assistant/tool pair in the conversation.
  */
 export function validateModelResponse(value: unknown): ModelResponse {
-  if (!isRecord(value)) throw new InvalidModelResponseError("Model response must be an object");
+  if (!isRecord(value)) {
+    throw new InvalidModelResponseError(ERROR_MESSAGES.modelResponse.mustBeObject);
+  }
 
   const { text, toolCalls: rawToolCalls, usage } = value;
   if (text !== undefined && typeof text !== "string") {
-    throw new InvalidModelResponseError("Model response text must be a string when present");
+    throw new InvalidModelResponseError(
+      ERROR_MESSAGES.modelResponse.textMustBeString,
+    );
   }
 
   let toolCalls: ToolCall[];
@@ -50,12 +52,14 @@ export function validateModelResponse(value: unknown): ModelResponse {
     toolCalls = parseToolCalls(rawToolCalls, "Model response toolCalls");
   } catch (error) {
     if (error instanceof InvalidToolCallsError) {
-      throw new InvalidModelResponseError(error.message);
+      throw new InvalidModelResponseError(error.message, { cause: error });
     }
     throw error;
   }
   if (toolCalls.length === 0 && (text === undefined || text.trim().length === 0)) {
-    throw new InvalidModelResponseError("Model response must contain text or tool calls");
+    throw new InvalidModelResponseError(
+      ERROR_MESSAGES.modelResponse.mustContainTextOrToolCalls,
+    );
   }
 
   let parsedUsage: TokenUsage | undefined;
@@ -63,7 +67,7 @@ export function validateModelResponse(value: unknown): ModelResponse {
     parsedUsage = parseTokenUsage(usage);
     if (!parsedUsage) {
       throw new InvalidModelResponseError(
-        "Model response usage must contain non-negative inputTokens and outputTokens",
+        ERROR_MESSAGES.modelResponse.usageMustBeNonNegative,
       );
     }
   }

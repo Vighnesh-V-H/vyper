@@ -1,3 +1,8 @@
+import {
+  ERROR_MESSAGES,
+  ProviderRequestError,
+  ProviderResponseError,
+} from "../errors";
 import type { TokenUsage } from "../types/context";
 import type { Message, ToolCall } from "../types/message";
 import type { Model, ModelResponse, ModelTool } from "../types/model";
@@ -5,7 +10,6 @@ import { isRecord } from "../util/is-record";
 import { omitUndefined } from "../util/omit-undefined";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-const MAX_ERROR_DETAIL = 2_000;
 
 type GenerateInput = Parameters<Model["generate"]>[0];
 
@@ -61,7 +65,9 @@ export class GeminiModel implements Model {
       signal: input.signal,
     });
 
-    if (!response.ok) throw new Error(await describeHttpError(response));
+    if (!response.ok) {
+      throw new ProviderRequestError(await describeHttpError(response));
+    }
     return parseResponse(await response.json(), this.#signatures);
   }
 
@@ -136,7 +142,9 @@ function toGeminiContents(
       case "tool": {
         const name = toolNames.get(message.toolCallId);
         if (name === undefined) {
-          throw new Error(`Cannot map tool result ${message.toolCallId} to a function call`);
+          throw new ProviderResponseError(
+            ERROR_MESSAGES.gemini.missingToolResultMapping(message.toolCallId),
+          );
         }
         appendParts(contents, "user", [
           {
@@ -170,7 +178,9 @@ function appendParts(
 }
 
 function parseResponse(data: unknown, signatures: Map<string, string>): ModelResponse {
-  if (!isRecord(data)) throw new Error("Gemini returned a non-object response");
+  if (!isRecord(data)) {
+    throw new ProviderResponseError(ERROR_MESSAGES.gemini.nonObjectResponse);
+  }
 
   const candidate = firstCandidate(data);
   const textParts: string[] = [];
@@ -193,15 +203,19 @@ function parseResponse(data: unknown, signatures: Map<string, string>): ModelRes
 function firstCandidate(data: Record<string, unknown>): Record<string, unknown> {
   const candidates = data.candidates;
   if (!Array.isArray(candidates) || candidates.length === 0) {
-    const reason =
+    const blockReason =
       isRecord(data.promptFeedback) && typeof data.promptFeedback.blockReason === "string"
-        ? ` (blocked: ${data.promptFeedback.blockReason})`
-        : "";
-    throw new Error(`Gemini returned no candidates${reason}`);
+        ? data.promptFeedback.blockReason
+        : undefined;
+    throw new ProviderResponseError(
+      ERROR_MESSAGES.gemini.noCandidates(blockReason),
+    );
   }
 
   const candidate = candidates[0];
-  if (!isRecord(candidate)) throw new Error("Gemini returned a malformed candidate");
+  if (!isRecord(candidate)) {
+    throw new ProviderResponseError(ERROR_MESSAGES.gemini.malformedCandidate);
+  }
   return candidate;
 }
 
@@ -219,12 +233,16 @@ function readToolCall(
   if (!isRecord(call)) return undefined;
 
   if (typeof call.name !== "string" || call.name.length === 0) {
-    throw new Error("Gemini function call is missing a name");
+    throw new ProviderResponseError(
+      ERROR_MESSAGES.gemini.functionCallMissingName,
+    );
   }
 
   const args = call.args === undefined ? {} : call.args;
   if (!isRecord(args)) {
-    throw new Error(`Gemini function call ${call.name} has non-object arguments`);
+    throw new ProviderResponseError(
+      ERROR_MESSAGES.gemini.functionCallArgumentsNotObject(call.name),
+    );
   }
 
   const id =
@@ -264,11 +282,13 @@ function readUsage(data: Record<string, unknown>): TokenUsage | undefined {
 
 function emptyResponseError(candidate: Record<string, unknown>): Error {
   const reason = typeof candidate.finishReason === "string" ? candidate.finishReason : "unknown";
-  return new Error(`Gemini returned an empty response (finishReason: ${reason})`);
+  return new ProviderResponseError(ERROR_MESSAGES.gemini.emptyResponse(reason));
 }
 
 async function describeHttpError(response: Response): Promise<string> {
-  const detail = (await response.text()).trim();
-  const summary = `Gemini request failed (${response.status} ${response.statusText})`;
-  return detail.length === 0 ? summary : `${summary}: ${detail.slice(0, MAX_ERROR_DETAIL)}`;
+  return ERROR_MESSAGES.gemini.requestFailed(
+    response.status,
+    response.statusText,
+    await response.text(),
+  );
 }

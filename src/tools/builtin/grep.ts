@@ -1,5 +1,12 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
+import {
+  ERROR_MESSAGES,
+  ToolCancelledError,
+  ToolExecutionError,
+  ToolInputError,
+  errorMessage,
+} from "../../errors";
 import type { JsonSchema, ToolDefinition } from "../../types/tools";
 
 interface GrepArgs { pattern: string; path?: string; glob?: string }
@@ -15,11 +22,19 @@ const parameters: JsonSchema = {
   additionalProperties: false,
 };
 function parse(input: unknown): GrepArgs {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Arguments must be an object");
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.argumentsMustBeObject);
+  }
   const value = input as Record<string, unknown>;
-  if (typeof value.pattern !== "string") throw new Error("pattern must be a string");
-  if (value.path !== undefined && typeof value.path !== "string") throw new Error("path must be a string");
-  if (value.glob !== undefined && typeof value.glob !== "string") throw new Error("glob must be a string");
+  if (typeof value.pattern !== "string") {
+    throw new ToolInputError(ERROR_MESSAGES.tools.patternMustBeString);
+  }
+  if (value.path !== undefined && typeof value.path !== "string") {
+    throw new ToolInputError(ERROR_MESSAGES.tools.pathMustBeString);
+  }
+  if (value.glob !== undefined && typeof value.glob !== "string") {
+    throw new ToolInputError(ERROR_MESSAGES.tools.globMustBeString);
+  }
   return { pattern: value.pattern, ...(typeof value.path === "string" ? { path: value.path } : {}), ...(typeof value.glob === "string" ? { glob: value.glob } : {}) };
 }
 const ignored = new Set([".git", "node_modules", ".next", "dist", "build"]);
@@ -34,11 +49,22 @@ export const grep: ToolDefinition<GrepArgs, string> = {
   parse,
   async execute({ pattern, path = ".", glob }, { cwd, signal }) {
     let expression: RegExp;
-    try { expression = new RegExp(pattern); } catch (error) { throw new Error(`Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`); }
+    try {
+      expression = new RegExp(pattern);
+    } catch (error) {
+      throw new ToolInputError(
+        ERROR_MESSAGES.tools.invalidRegularExpression(errorMessage(error)),
+        { cause: error },
+      );
+    }
     const root = await realpath(cwd);
     const start = resolve(root, path);
     const startRel = relative(root, start);
-    if (startRel === ".." || startRel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("Path must stay inside the working directory");
+    if (startRel === ".." || startRel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+      throw new ToolExecutionError(
+        ERROR_MESSAGES.tools.pathOutsideWorkingDirectory,
+      );
+    }
     const matches: Match[] = [];
     let scanned = 0;
     let bytes = 0;
@@ -77,7 +103,7 @@ export const grep: ToolDefinition<GrepArgs, string> = {
     };
     await visit(start);
     const output = matches.map((item) => `${item.path}:${item.line}: ${item.text}`);
-    if (signal.aborted) throw new Error("Tool execution cancelled");
+    if (signal.aborted) throw new ToolCancelledError();
     if (scanned >= MAX_FILES || bytes >= MAX_BYTES || matches.length >= MAX_MATCHES) output.push("... results limited");
     return output.join("\n") || "No matches found.";
   },

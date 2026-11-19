@@ -1,3 +1,4 @@
+import { ConfigurationError, ERROR_MESSAGES } from "../errors";
 import type { ToolDefinition } from "../types/tools";
 import { bash } from "./builtin/bash";
 import { grep } from "./builtin/grep";
@@ -27,7 +28,11 @@ export interface ToolDiscoveryOptions {
  * stay outside the generic harness.
  */
 export function discoverTools(options: ToolDiscoveryOptions = {}): readonly ToolDefinition[] {
-  if (!options || typeof options !== "object") throw new TypeError("ToolDiscoveryOptions must be an object");
+  if (!options || typeof options !== "object") {
+    throw new ConfigurationError(
+      ERROR_MESSAGES.toolDiscovery.optionsMustBeObject,
+    );
+  }
   const tools: ToolDefinition[] = [];
   if (options.builtins !== false) tools.push(...builtinTools);
   if (options.tools) tools.push(...options.tools);

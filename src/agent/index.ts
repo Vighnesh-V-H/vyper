@@ -1,2 +1,3 @@
+export { InvalidModelResponseError } from "../errors";
 export { Agent } from "./agent";
-export { InvalidModelResponseError, validateModelResponse } from "./model-response";
+export { validateModelResponse } from "./model-response";

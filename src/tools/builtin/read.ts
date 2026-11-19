@@ -1,5 +1,11 @@
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+import {
+  ERROR_MESSAGES,
+  ToolCancelledError,
+  ToolExecutionError,
+  ToolInputError,
+} from "../../errors";
 import type { JsonSchema, ToolDefinition } from "../../types/tools";
 
 interface ReadArgs { path: string; offset?: number; limit?: number }
@@ -15,11 +21,19 @@ const parameters: JsonSchema = {
 };
 
 function parse(input: unknown): ReadArgs {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Arguments must be an object");
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.argumentsMustBeObject);
+  }
   const value = input as Record<string, unknown>;
-  if (typeof value.path !== "string" || !value.path.trim()) throw new Error("path must be a non-empty string");
-  if (value.offset !== undefined && (!Number.isInteger(value.offset) || (value.offset as number) < 1)) throw new Error("offset must be a positive integer");
-  if (value.limit !== undefined && (!Number.isInteger(value.limit) || (value.limit as number) < 1)) throw new Error("limit must be a positive integer");
+  if (typeof value.path !== "string" || !value.path.trim()) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.pathMustBeNonEmptyString);
+  }
+  if (value.offset !== undefined && (!Number.isInteger(value.offset) || (value.offset as number) < 1)) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.offsetMustBePositiveInteger);
+  }
+  if (value.limit !== undefined && (!Number.isInteger(value.limit) || (value.limit as number) < 1)) {
+    throw new ToolInputError(ERROR_MESSAGES.tools.limitMustBePositiveInteger);
+  }
   return { path: value.path, ...(value.offset === undefined ? {} : { offset: value.offset as number }), ...(value.limit === undefined ? {} : { limit: value.limit as number }) };
 }
 
@@ -29,16 +43,16 @@ export const read: ToolDefinition<ReadArgs, string> = {
   parameters,
   parse,
   async execute({ path, offset = 1, limit = 500 }, { cwd, signal }) {
-    if (signal.aborted) throw new Error("Tool execution cancelled");
+    if (signal.aborted) throw new ToolCancelledError();
     const root = await realpath(cwd);
     const requested = resolve(root, path);
     if (isAbsolute(path) || (relative(root, requested).startsWith("..") || relative(root, requested) === "..")) {
-      throw new Error("Path must stay inside the working directory");
+      throw new ToolExecutionError(ERROR_MESSAGES.tools.pathOutsideWorkingDirectory);
     }
     const file = await realpath(requested);
     const rel = relative(root, file);
     if (rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) {
-      throw new Error("Path must stay inside the working directory");
+      throw new ToolExecutionError(ERROR_MESSAGES.tools.pathOutsideWorkingDirectory);
     }
     const content = await readFile(file, { encoding: "utf8", signal });
     const allLines = content.split(/\r?\n/);

@@ -1,3 +1,10 @@
+import {
+  ConfigurationError,
+  ERROR_MESSAGES,
+  ToolCancelledError,
+  ToolTimeoutError,
+  errorMessage,
+} from "../errors";
 import type {
   ToolCatalog,
   ToolContext,
@@ -48,25 +55,6 @@ function notify<T>(callback: ((value: T) => void) | undefined, value: T): void {
 
 const DEFAULT_MAX_RESULT_CHARS = 100_000;
 
-class ToolAbortError extends Error {
-  constructor() {
-    super("Tool execution cancelled");
-    this.name = "ToolAbortError";
-  }
-}
-
-class ToolTimeoutError extends Error {
-  constructor() {
-    super("Tool execution timed out");
-    this.name = "ToolTimeoutError";
-  }
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message.length > 0 ? error.message : error.name;
-  return String(error);
-}
-
 /** Bound text to exactly maxChars when truncation is needed. */
 function boundText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
@@ -77,14 +65,20 @@ function boundText(text: string, maxChars: number): string {
 
 function normalizeTimeout(value: number | undefined): number | undefined {
   if (value === undefined) return undefined;
-  if (!Number.isFinite(value) || value <= 0) throw new TypeError("timeoutMs must be a positive number");
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new ConfigurationError(
+      ERROR_MESSAGES.executor.timeoutMustBePositiveNumber,
+    );
+  }
   return value;
 }
 
 function normalizeMaxResultChars(value: number | undefined): number {
   if (value === undefined) return DEFAULT_MAX_RESULT_CHARS;
   if (!Number.isInteger(value) || value <= 0) {
-    throw new TypeError("maxResultChars must be a positive integer");
+    throw new ConfigurationError(
+      ERROR_MESSAGES.executor.maxResultCharsMustBePositiveInteger,
+    );
   }
   return value;
 }
@@ -92,7 +86,9 @@ function normalizeMaxResultChars(value: number | undefined): number {
 function normalizeConcurrency(value: number | undefined): number {
   if (value === undefined) return 1;
   if (!Number.isInteger(value) || value <= 0) {
-    throw new TypeError("concurrency must be a positive integer");
+    throw new ConfigurationError(
+      ERROR_MESSAGES.executor.concurrencyMustBePositiveInteger,
+    );
   }
   return value;
 }
@@ -113,7 +109,9 @@ export class ToolExecutionEngine {
 
   constructor(catalog: ToolCatalog, options: ToolExecutionEngineOptions = {}) {
     if (!catalog || typeof catalog.get !== "function" || typeof catalog.list !== "function") {
-      throw new TypeError("Tool catalog must provide get() and list()");
+      throw new ConfigurationError(
+        ERROR_MESSAGES.executor.catalogMustProvideGetAndList,
+      );
     }
     this.#catalog = catalog;
     this.#timeoutMs = normalizeTimeout(options.timeoutMs);
@@ -142,19 +140,31 @@ export class ToolExecutionEngine {
         durationMs: Date.now() - startedAt,
       });
 
-    if (context.signal.aborted) return fail("cancelled", "Tool execution cancelled");
+    if (context.signal.aborted) {
+      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
+    }
 
     const tool = this.#catalog.get(request.name);
-    if (!tool) return fail("unknown-tool", `Unknown tool: ${request.name}`);
+    if (!tool) {
+      return fail("unknown-tool", ERROR_MESSAGES.executor.unknownTool(request.name));
+    }
 
     let args: unknown;
     try {
       args = tool.parse(request.arguments);
     } catch (error) {
-      return fail("invalid-arguments", `Invalid arguments for ${request.name}: ${errorMessage(error)}`);
+      return fail(
+        "invalid-arguments",
+        ERROR_MESSAGES.executor.invalidArguments(
+          request.name,
+          errorMessage(error),
+        ),
+      );
     }
 
-    if (context.signal.aborted) return fail("cancelled", "Tool execution cancelled");
+    if (context.signal.aborted) {
+      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
+    }
 
     const timeoutSignal = this.#timeoutMs === undefined ? undefined : AbortSignal.timeout(this.#timeoutMs);
     const signal = timeoutSignal ? AbortSignal.any([context.signal, timeoutSignal]) : context.signal;
@@ -169,7 +179,11 @@ export class ToolExecutionEngine {
     const aborted = new Promise<never>((_resolve, reject) => {
       const abort = (): void => {
         const timedOut = timeoutSignal?.aborted === true && !context.signal.aborted;
-        reject(timedOut ? new ToolTimeoutError() : new ToolAbortError());
+        reject(
+          timedOut
+            ? new ToolTimeoutError(this.#timeoutMs)
+            : new ToolCancelledError(),
+        );
       };
       if (signal.aborted) {
         abort();
@@ -185,27 +199,46 @@ export class ToolExecutionEngine {
     } catch (error) {
       const timedOut = timeoutSignal?.aborted === true && !context.signal.aborted;
       if (timedOut) {
-        return fail("timeout", `Tool execution timed out after ${this.#timeoutMs} ms`);
+        return fail(
+          "timeout",
+          ERROR_MESSAGES.executor.timedOut(this.#timeoutMs),
+        );
       }
-      if (context.signal.aborted) return fail("cancelled", "Tool execution cancelled");
-      return fail("execution", `Tool ${request.name} failed: ${errorMessage(error)}`);
+      if (context.signal.aborted) {
+        return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
+      }
+      return fail(
+        "execution",
+        ERROR_MESSAGES.executor.failed(request.name, errorMessage(error)),
+      );
     } finally {
       if (onAbort) signal.removeEventListener("abort", onAbort);
     }
 
-    if (context.signal.aborted) return fail("cancelled", "Tool execution cancelled");
+    if (context.signal.aborted) {
+      return fail("cancelled", ERROR_MESSAGES.tools.executionCancelled);
+    }
     if (timeoutSignal?.aborted === true) {
-      return fail("timeout", `Tool execution timed out after ${this.#timeoutMs} ms`);
+      return fail("timeout", ERROR_MESSAGES.executor.timedOut(this.#timeoutMs));
     }
 
     let rendered: unknown;
     try {
       rendered = tool.render(args, result);
     } catch (error) {
-      return fail("execution", `Tool ${request.name} failed to render its result: ${errorMessage(error)}`);
+      return fail(
+        "execution",
+        ERROR_MESSAGES.executor.renderFailed(
+          request.name,
+          errorMessage(error),
+        ),
+      );
     }
     if (typeof rendered !== "string") {
-      return fail("execution", `Tool ${request.name} render() must return a string`);
+      return fail(
+        "execution",
+        ERROR_MESSAGES.executor.renderMustReturnString(request.name),
+      );
     }
 
     return complete({

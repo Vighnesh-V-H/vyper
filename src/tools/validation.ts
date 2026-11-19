@@ -1,3 +1,4 @@
+import { ERROR_MESSAGES, ToolDefinitionError } from "../errors";
 import type { ToolDefinition } from "../types/tools";
 import { isRecord } from "../util/is-record";
 
@@ -18,40 +19,78 @@ function describe(value: Record<string, unknown>): string {
  * untrusted configuration and fail loudly instead of failing per call.
  */
 export function validateToolDefinition(value: unknown): asserts value is ToolDefinition {
-  if (!isRecord(value)) throw new Error("Tool definition must be an object");
+  if (!isRecord(value)) {
+    throw new ToolDefinitionError(ERROR_MESSAGES.toolDefinition.mustBeObject);
+  }
   const label = describe(value);
 
   if (typeof value.name !== "string" || !TOOL_NAME_PATTERN.test(value.name)) {
-    throw new Error(`Invalid ${label} name: expected 1-64 characters matching ${TOOL_NAME_PATTERN}`);
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.invalidName(label, TOOL_NAME_PATTERN),
+    );
   }
   if (typeof value.description !== "string" || value.description.trim().length === 0) {
-    throw new Error(`Invalid ${label}: description must be a non-empty string`);
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.descriptionMustBeNonEmptyString(label),
+    );
   }
 
   const parameters = value.parameters;
-  if (!isRecord(parameters)) throw new Error(`Invalid ${label}: parameters must be a JSON schema object`);
-  if (parameters.type !== "object") throw new Error(`Invalid ${label}: parameters.type must be "object"`);
+  if (!isRecord(parameters)) {
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.parametersMustBeSchemaObject(label),
+    );
+  }
+  if (parameters.type !== "object") {
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.parametersTypeMustBeObject(label),
+    );
+  }
 
   const properties = parameters.properties;
   if (properties !== undefined) {
-    if (!isRecord(properties)) throw new Error(`Invalid ${label}: parameters.properties must be an object`);
+    if (!isRecord(properties)) {
+      throw new ToolDefinitionError(
+        ERROR_MESSAGES.toolDefinition.propertiesMustBeObject(label),
+      );
+    }
     for (const key of Object.keys(properties)) {
-      if (key.length === 0) throw new Error(`Invalid ${label}: parameter names must not be empty`);
+      if (key.length === 0) {
+        throw new ToolDefinitionError(
+          ERROR_MESSAGES.toolDefinition.parameterNamesMustNotBeEmpty(label),
+        );
+      }
     }
   }
 
   const required = parameters.required;
   if (required !== undefined) {
     if (!Array.isArray(required) || required.some((item) => typeof item !== "string" || item.length === 0)) {
-      throw new Error(`Invalid ${label}: parameters.required must be an array of non-empty strings`);
+      throw new ToolDefinitionError(
+        ERROR_MESSAGES.toolDefinition.requiredMustBeStringArray(label),
+      );
     }
   }
 
   if (parameters.additionalProperties !== undefined && typeof parameters.additionalProperties !== "boolean") {
-    throw new Error(`Invalid ${label}: parameters.additionalProperties must be a boolean`);
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.additionalPropertiesMustBeBoolean(label),
+    );
   }
 
-  if (typeof value.parse !== "function") throw new Error(`Invalid ${label}: parse must be a function`);
-  if (typeof value.execute !== "function") throw new Error(`Invalid ${label}: execute must be a function`);
-  if (typeof value.render !== "function") throw new Error(`Invalid ${label}: render must be a function`);
+  if (typeof value.parse !== "function") {
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.parseMustBeFunction(label),
+    );
+  }
+  if (typeof value.execute !== "function") {
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.executeMustBeFunction(label),
+    );
+  }
+  if (typeof value.render !== "function") {
+    throw new ToolDefinitionError(
+      ERROR_MESSAGES.toolDefinition.renderMustBeFunction(label),
+    );
+  }
 }

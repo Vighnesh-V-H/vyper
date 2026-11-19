@@ -1,10 +1,12 @@
 
 import { main } from "./cli";
+import { errorMessage } from "./errors";
 
+export * from "./errors";
 export * from "./types";
 
 export { Agent } from "./agent/agent";
-export { InvalidModelResponseError, validateModelResponse } from "./agent/model-response";
+export { validateModelResponse } from "./agent/model-response";
 
 export { ToolRegistry } from "./tools/registry";
 export { ToolExecutionEngine, executeTool } from "./tools/executor";
@@ -23,7 +25,7 @@ export { bash } from "./tools/builtin/bash";
 
 if (import.meta.main) {
   await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(errorMessage(error));
     process.exitCode = 1;
   });
 }

@@ -1,3 +1,12 @@
+import {
+  AgentError,
+  ConfigurationError,
+  ContextError,
+  ConversationError,
+  ERROR_MESSAGES,
+  ToolRegistrationError,
+  toError,
+} from "../errors";
 import type {
   AgentErrorStage,
   AgentEvent,
@@ -30,16 +39,15 @@ interface ToolSnapshot {
   readonly modelTools: ModelTool[];
 }
 
-function toError(value: unknown): Error {
-  if (value instanceof Error) return value;
-  return new Error(String(value), { cause: value });
-}
-
 function snapshotTools(catalog: ToolCatalog): ToolSnapshot {
   const tools = new Map<string, ToolDefinition>();
   for (const tool of catalog.list()) {
     validateToolDefinition(tool);
-    if (tools.has(tool.name)) throw new Error(`Duplicate tool in catalog: ${tool.name}`);
+    if (tools.has(tool.name)) {
+      throw new ToolRegistrationError(
+        ERROR_MESSAGES.agent.duplicateTool(tool.name),
+      );
+    }
     tools.set(tool.name, tool);
   }
 
@@ -98,37 +106,41 @@ interface NormalizedAgentOptions {
 }
 
 function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
-  if (!options || typeof options !== "object") throw new TypeError("AgentOptions must be an object");
+  if (!options || typeof options !== "object") {
+    throw new ConfigurationError(ERROR_MESSAGES.agent.optionsMustBeObject);
+  }
   if (!options.model || typeof options.model.generate !== "function") {
-    throw new TypeError("AgentOptions.model must provide generate()");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.modelMustProvideGenerate);
   }
   if (
     !options.context ||
     typeof options.context.prepare !== "function" ||
     typeof options.context.observe !== "function"
   ) {
-    throw new TypeError("AgentOptions.context must provide prepare() and observe()");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.contextMustProvideHooks);
   }
   if (
     !options.tools ||
     typeof options.tools.get !== "function" ||
     typeof options.tools.list !== "function"
   ) {
-    throw new TypeError("AgentOptions.tools must provide get() and list()");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.toolsMustProvideCatalog);
   }
   if (typeof options.instructions !== "string") {
-    throw new TypeError("AgentOptions.instructions must be a string");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.instructionsMustBeString);
   }
   if (typeof options.cwd !== "string" || options.cwd.length === 0) {
-    throw new TypeError("AgentOptions.cwd must be a non-empty string");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.cwdMustBeNonEmptyString);
   }
   if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
-    throw new TypeError("AgentOptions.onEvent must be a function");
+    throw new ConfigurationError(ERROR_MESSAGES.agent.onEventMustBeFunction);
   }
 
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   if (!Number.isInteger(maxSteps) || maxSteps <= 0) {
-    throw new TypeError("AgentOptions.maxSteps must be a positive integer");
+    throw new ConfigurationError(
+      ERROR_MESSAGES.agent.maxStepsMustBePositiveInteger,
+    );
   }
 
   return {
@@ -166,10 +178,10 @@ function validatePreparedContext(
     !Number.isFinite(prepared.tokensEstimated) ||
     prepared.tokensEstimated < 0
   ) {
-    throw new Error("ContextManager.prepare() returned an invalid PreparedContext");
+    throw new ContextError(ERROR_MESSAGES.context.invalidPreparedContext);
   }
   if (prepared.system !== undefined && typeof prepared.system !== "string") {
-    throw new Error("ContextManager.prepare() returned a non-string system prompt");
+    throw new ContextError(ERROR_MESSAGES.context.systemPromptMustBeString);
   }
 
   let messages: Message[];
@@ -179,9 +191,10 @@ function validatePreparedContext(
     toolCallIds = validateConversation(messages);
   } catch (error) {
     const failure = toError(error);
-    throw new Error(`ContextManager.prepare() returned invalid messages: ${failure.message}`, {
-      cause: failure,
-    });
+    throw new ContextError(
+      ERROR_MESSAGES.context.invalidMessages(failure.message),
+      { cause: failure },
+    );
   }
 
   return {
@@ -270,13 +283,17 @@ export class Agent {
    */
   async run(input: string | readonly Message[], options: AgentRunOptions = {}): Promise<AgentResult> {
     if (typeof input !== "string" && !Array.isArray(input)) {
-      throw new TypeError("Agent input must be a string or an array of messages");
+      throw new ConfigurationError(
+        ERROR_MESSAGES.agent.inputMustBeStringOrMessages,
+      );
     }
     if (!options || typeof options !== "object") {
-      throw new TypeError("AgentRunOptions must be an object");
+      throw new ConfigurationError(ERROR_MESSAGES.agent.runOptionsMustBeObject);
     }
     if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
-      throw new TypeError("AgentRunOptions.onEvent must be a function");
+      throw new ConfigurationError(
+        ERROR_MESSAGES.agent.runOnEventMustBeFunction,
+      );
     }
 
     let history: Message[];
@@ -323,7 +340,7 @@ export class Agent {
       finish({
         status: "aborted",
         messages: history,
-        output: "Run aborted.",
+        output: ERROR_MESSAGES.agent.runAborted,
         steps,
         usage,
       });
@@ -405,7 +422,12 @@ export class Agent {
 
       for (const call of response.toolCalls) {
         if (usedToolCallIds.has(call.id)) {
-          return fail("response", new Error(`Duplicate tool call id in conversation: ${call.id}`));
+          return fail(
+            "response",
+            new ConversationError(
+              ERROR_MESSAGES.conversation.duplicateToolCallId(call.id),
+            ),
+          );
         }
       }
 
@@ -449,12 +471,15 @@ export class Agent {
           type: "warning",
           step,
           stage: "response",
-          error: new Error("Model requested tools on the final, tool-free step"),
+          error: new AgentError(ERROR_MESSAGES.agent.finalStepRequestedTools),
         });
         return finish({
           status: "max-steps",
           messages: history,
-          output: text.trim().length > 0 ? text : `Maximum steps reached (${this.maxSteps}).`,
+          output:
+            text.trim().length > 0
+              ? text
+              : ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
           steps,
           usage,
         });
@@ -483,7 +508,9 @@ export class Agent {
             signal,
             deferContext: (message) => {
               if (!message || message.role !== "user" || typeof message.content !== "string") {
-                throw new TypeError("deferContext() requires a user message with string content");
+                throw new AgentError(
+                  ERROR_MESSAGES.agent.deferContextRequiresUserMessage,
+                );
               }
               deferred.push({ role: "user", content: message.content });
             },
@@ -505,7 +532,7 @@ export class Agent {
             const result = syntheticToolResult(
               call.id,
               call.name,
-              "Tool execution cancelled",
+              ERROR_MESSAGES.tools.executionCancelled,
               "cancelled",
             );
             history.push({ role: "tool", toolCallId: call.id, content: result.content });
@@ -514,7 +541,7 @@ export class Agent {
           return aborted();
         }
 
-        const content = `Tool execution failed: ${failure.message}`;
+        const content = ERROR_MESSAGES.agent.toolExecutionFailed(failure.message);
         for (const call of response.toolCalls) {
           const result = syntheticToolResult(call.id, call.name, content, "execution");
           history.push({ role: "tool", toolCallId: call.id, content: result.content });
@@ -533,7 +560,7 @@ export class Agent {
           result = syntheticToolResult(
             call.id,
             call.name,
-            "Tool execution returned no result for this call.",
+            ERROR_MESSAGES.agent.missingToolResult,
             "execution",
           );
           emit({ type: "tool-result", step, result: cloneToolResultForEvent(result) });
@@ -551,7 +578,7 @@ export class Agent {
     return finish({
       status: "max-steps",
       messages: history,
-      output: `Maximum steps reached (${this.maxSteps}).`,
+      output: ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
       steps,
       usage,
     });

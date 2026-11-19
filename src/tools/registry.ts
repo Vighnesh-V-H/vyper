@@ -1,3 +1,4 @@
+import { ERROR_MESSAGES, ToolRegistrationError } from "../errors";
 import type { ModelTool } from "../types/model";
 import type { ToolCatalog, ToolDefinition } from "../types/tools";
 import { validateToolDefinition } from "./validation";
@@ -28,7 +29,9 @@ export class ToolRegistry implements ToolCatalog {
     for (const tool of pending) {
       validateToolDefinition(tool);
       if (this.tools.has(tool.name) || names.has(tool.name)) {
-        throw new Error(`Tool already registered: ${tool.name}`);
+        throw new ToolRegistrationError(
+          ERROR_MESSAGES.toolRegistry.alreadyRegistered(tool.name),
+        );
       }
       names.add(tool.name);
     }

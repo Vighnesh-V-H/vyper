@@ -1,25 +1,27 @@
+import { ERROR_MESSAGES, InvalidToolCallsError } from "../errors";
 import type { ToolCall } from "../types/message";
 import { isRecord } from "../util/is-record";
 
-export class InvalidToolCallsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidToolCallsError";
-  }
-}
-
 function parseToolCall(value: unknown, label: string): ToolCall {
-  if (!isRecord(value)) throw new InvalidToolCallsError(`${label} must be an object`);
+  if (!isRecord(value)) {
+    throw new InvalidToolCallsError(ERROR_MESSAGES.toolCalls.mustBeObject(label));
+  }
 
   const { id, name, arguments: args } = value;
   if (typeof id !== "string" || id.length === 0) {
-    throw new InvalidToolCallsError(`${label}.id must be a non-empty string`);
+    throw new InvalidToolCallsError(
+      ERROR_MESSAGES.toolCalls.idMustBeNonEmptyString(label),
+    );
   }
   if (typeof name !== "string" || name.length === 0) {
-    throw new InvalidToolCallsError(`${label}.name must be a non-empty string`);
+    throw new InvalidToolCallsError(
+      ERROR_MESSAGES.toolCalls.nameMustBeNonEmptyString(label),
+    );
   }
   if (!isRecord(args)) {
-    throw new InvalidToolCallsError(`${label}.arguments must be an object`);
+    throw new InvalidToolCallsError(
+      ERROR_MESSAGES.toolCalls.argumentsMustBeObject(label),
+    );
   }
 
   // Detach the top level so an adapter or event handler cannot mutate the
@@ -29,12 +31,16 @@ function parseToolCall(value: unknown, label: string): ToolCall {
 
 /** Validate untrusted tool calls and enforce unique ids within the set. */
 export function parseToolCalls(value: unknown, label = "toolCalls"): ToolCall[] {
-  if (!Array.isArray(value)) throw new InvalidToolCallsError(`${label} must be an array`);
+  if (!Array.isArray(value)) {
+    throw new InvalidToolCallsError(ERROR_MESSAGES.toolCalls.mustBeArray(label));
+  }
 
   const calls = value.map((call, index) => parseToolCall(call, `${label}[${index}]`));
   const seen = new Set<string>();
   for (const call of calls) {
-    if (seen.has(call.id)) throw new InvalidToolCallsError(`Duplicate tool call id: ${call.id}`);
+    if (seen.has(call.id)) {
+      throw new InvalidToolCallsError(ERROR_MESSAGES.toolCalls.duplicateId(call.id));
+    }
     seen.add(call.id);
   }
   return calls;
