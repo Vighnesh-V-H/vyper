@@ -6,11 +6,22 @@ To install dependencies:
 bun install
 ```
 
-To run:
+To run interactively:
 
 ```bash
 bun run index.ts
 ```
+
+Type a prompt and press Enter. The conversation continues across turns; use
+`/new` to clear history and `/exit` to quit. Ctrl+C aborts the current turn.
+
+To run a single prompt and exit:
+
+```bash
+bun run index.ts "summarize src/agent/agent.ts"
+```
+
+Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 
 To type check:
 
