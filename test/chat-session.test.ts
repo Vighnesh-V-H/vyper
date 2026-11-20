@@ -474,6 +474,41 @@ describe("persisted ChatSession", () => {
     }
   });
 
+  test("releases the stream lock when opening the chat session fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vyper-chat-open-failure-"));
+    const codec = new SessionEventCodec();
+    const openLog = () => new FileEventLog<SessionEvent>({ directory, codec });
+    const expected = new Error("snapshot failed");
+
+    try {
+      const session = await SessionLog.open({
+        log: openLog(),
+        codec,
+        sessionId,
+        model: "test-model",
+        cwd: "/work",
+      });
+      session.snapshot = async () => {
+        throw expected;
+      };
+
+      await expect(
+        ChatSession.open({ agent: scriptedAgent([]), session }),
+      ).rejects.toBe(expected);
+
+      const retry = await SessionLog.open({
+        log: openLog(),
+        codec,
+        sessionId,
+        model: "test-model",
+        cwd: "/work",
+      });
+      await retry.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("retracts a turn interrupted by a previous process", async () => {
     const { session } = await openSession();
     await session.append({
