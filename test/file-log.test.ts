@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLogError } from "../src/errors";
@@ -165,6 +172,168 @@ describe("FileEventLog", () => {
       await expect(handle.append({ value: "late" })).rejects.toThrow(
         /closed/,
       );
+    });
+  });
+
+  test("rejects a second writer until the first handle closes", async () => {
+    await withDirectory(async (directory) => {
+      const first = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+
+      await expect(
+        new FileEventLog<Payload>({ directory, codec }).open(streamId),
+      ).rejects.toThrow(/already open by another writer/);
+
+      await first.close();
+      expect(
+        (await readdir(directory)).some((name) => name.endsWith(".lock")),
+      ).toBe(false);
+
+      const second = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      await second.close();
+    });
+  });
+
+  test("recovers an abandoned lock file", async () => {
+    await withDirectory(async (directory) => {
+      const lockPath = join(directory, "stream-1.jsonl.lock");
+      await writeFile(lockPath, "", "utf8");
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      await handle.append({ value: "recovered" });
+      await handle.flush();
+      await handle.close();
+
+      const reopened = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(reopened.read())).map((record) => record.event.value),
+      ).toEqual(["recovered"]);
+      await reopened.close();
+    });
+  });
+
+  test("recovers an interrupted final record and truncates it before appending", async () => {
+    await withDirectory(async (directory) => {
+      const path = join(directory, "stream-1.jsonl");
+      const first = {
+        version: 1,
+        streamId: "stream-1",
+        sequence: 1,
+        timestamp: 1,
+        event: { value: "one" },
+      };
+      await writeFile(
+        path,
+        `${JSON.stringify(first)}\n{"version":1,"streamId":"stream-1"`,
+        "utf8",
+      );
+
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(handle.read())).map((record) => record.event.value),
+      ).toEqual(["one"]);
+
+      const second = await handle.append({ value: "two" });
+      expect(second.sequence).toBe(2);
+      await handle.flush();
+      await handle.close();
+
+      const reopened = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(reopened.read())).map((record) => record.event.value),
+      ).toEqual(["one", "two"]);
+      await reopened.close();
+
+      const contents = await readFile(path, "utf8");
+      expect(contents.endsWith("\n")).toBe(true);
+      expect(contents).not.toContain('"streamId":"stream-1"{"');
+    });
+  });
+
+  test("terminates a complete final record that lost its newline", async () => {
+    await withDirectory(async (directory) => {
+      const path = join(directory, "stream-1.jsonl");
+      const first = {
+        version: 1,
+        streamId: "stream-1",
+        sequence: 1,
+        timestamp: 1,
+        event: { value: "one" },
+      };
+      await writeFile(path, JSON.stringify(first), "utf8");
+
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(handle.read())).map((record) => record.event.value),
+      ).toEqual(["one"]);
+
+      const second = await handle.append({ value: "two" });
+      expect(second.sequence).toBe(2);
+      await handle.flush();
+      await handle.close();
+
+      const reopened = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(reopened.read())).map((record) => record.event.value),
+      ).toEqual(["one", "two"]);
+      await reopened.close();
+    });
+  });
+
+  test("validates appended events through the codec before writing", async () => {
+    await withDirectory(async (directory) => {
+      const finiteCodec: EventLogCodec<number> = {
+        version: 1,
+        decode(value) {
+          if (typeof value !== "number" || !Number.isFinite(value)) {
+            throw new EventLogError("value must be a finite number");
+          }
+          return value;
+        },
+      };
+      const stream = asEventLogStreamId("numbers");
+      const log = new FileEventLog<number>({
+        directory,
+        codec: finiteCodec,
+      });
+      const handle = await log.open(stream);
+
+      await expect(handle.append(Number.NaN)).rejects.toThrow(/finite number/);
+      const first = await handle.append(1);
+      expect(first.sequence).toBe(1);
+      await handle.flush();
+      await handle.close();
+
+      const reopened = await log.open(stream);
+      const values: number[] = [];
+      for await (const record of reopened.read()) values.push(record.event);
+      expect(values).toEqual([1]);
+      await reopened.close();
     });
   });
 });

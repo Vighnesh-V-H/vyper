@@ -97,29 +97,26 @@ function zeroUsage(): TokenUsage {
   return { inputTokens: 0, outputTokens: 0 };
 }
 
-function readTurnValues(
-  events: readonly SessionEvent[],
-  turnId: TurnId,
-): {
+interface TurnValues {
   readonly output: string;
   readonly steps: number;
   readonly usage: TokenUsage;
   readonly responses: readonly SessionModelRespondedEvent[];
   readonly tools: readonly SessionToolCompletedEvent[];
-} {
-  const responses: SessionModelRespondedEvent[] = [];
-  const tools: SessionToolCompletedEvent[] = [];
-  for (const event of events) {
-    if (event.type === SessionEventType.ModelResponded && event.turnId === turnId) {
-      responses.push(event);
-    } else if (
-      event.type === SessionEventType.ToolCompleted &&
-      event.turnId === turnId
-    ) {
-      tools.push(event);
-    }
-  }
+}
 
+interface MutableTurnValues {
+  readonly responses: SessionModelRespondedEvent[];
+  readonly tools: SessionToolCompletedEvent[];
+}
+
+function emptyTurnValues(): MutableTurnValues {
+  return { responses: [], tools: [] };
+}
+
+function deriveTurnValues(values: MutableTurnValues | undefined): TurnValues {
+  const responses = values?.responses ?? [];
+  const tools = values?.tools ?? [];
   const usage = zeroUsage();
   let steps = 0;
   for (const response of responses) {
@@ -139,11 +136,53 @@ function readTurnValues(
   };
 }
 
+/**
+ * Group values by turn while replay walks the stream once. A TurnFinished then
+ * checks only its own turn instead of rescanning every earlier event.
+ */
+function accumulateTurnValues(
+  turns: Map<TurnId, MutableTurnValues>,
+  event: SessionEvent,
+): void {
+  if (event.type === SessionEventType.ModelResponded) {
+    let values = turns.get(event.turnId);
+    if (values === undefined) {
+      values = emptyTurnValues();
+      turns.set(event.turnId, values);
+    }
+    values.responses.push(event);
+  } else if (event.type === SessionEventType.ToolCompleted) {
+    let values = turns.get(event.turnId);
+    if (values === undefined) {
+      values = emptyTurnValues();
+      turns.set(event.turnId, values);
+    }
+    values.tools.push(event);
+  }
+}
+
+function readTurnValues(
+  events: readonly SessionEvent[],
+  turnId: TurnId,
+): TurnValues {
+  const values = emptyTurnValues();
+  for (const event of events) {
+    if (event.type === SessionEventType.ModelResponded && event.turnId === turnId) {
+      values.responses.push(event);
+    } else if (
+      event.type === SessionEventType.ToolCompleted &&
+      event.turnId === turnId
+    ) {
+      values.tools.push(event);
+    }
+  }
+  return deriveTurnValues(values);
+}
+
 function assertTurnFinishedMatches(
   finished: SessionTurnFinishedEvent,
-  events: readonly SessionEvent[],
+  derived: TurnValues,
 ): void {
-  const derived = readTurnValues(events, finished.turnId);
   const mismatch = (
     field: string,
     expected: string,
@@ -260,8 +299,8 @@ export function replaySession(
   let activeTurnSequence: number | undefined;
   let lastSequence = 0;
   let expectedSequence = 1;
-  /** All events seen so far, including retracted ones, for finish validation. */
-  const processed: SessionEvent[] = [];
+  /** Per-turn values, including retracted turns, for finish validation. */
+  const turnValues = new Map<TurnId, MutableTurnValues>();
 
   for (const record of records) {
     if (record.sequence !== expectedSequence) {
@@ -272,7 +311,7 @@ export function replaySession(
     expectedSequence += 1;
     lastSequence = record.sequence;
     const event = record.event;
-    processed.push(event);
+    accumulateTurnValues(turnValues, event);
 
     if (event.type === SessionEventType.Header) {
       if (record.sequence !== 1 || header !== undefined) {
@@ -359,7 +398,10 @@ export function replaySession(
       case SessionEventType.TurnFinished:
         // Re-validate on replay: the store is a trust boundary, so a manually
         // corrupted finish must not silently replace committed history.
-        assertTurnFinishedMatches(event, processed);
+        assertTurnFinishedMatches(
+          event,
+          deriveTurnValues(turnValues.get(event.turnId)),
+        );
         if (event.status !== "aborted" && "messages" in event) {
           messages = [...event.messages];
           messagesSequence = record.sequence;
@@ -657,7 +699,10 @@ export class SessionLog {
           ERROR_MESSAGES.sessionLog.turnAlreadyFinished(event.turnId),
         );
       }
-      assertTurnFinishedMatches(event, this.#events);
+      assertTurnFinishedMatches(
+        event,
+        readTurnValues(this.#events, event.turnId),
+      );
       return;
     }
 

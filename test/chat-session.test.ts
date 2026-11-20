@@ -518,6 +518,143 @@ describe("persisted ChatSession", () => {
     expect(records.at(-1)?.event.type).toBe(SessionEventType.Reset);
   });
 
+  test("rejects a turn while reset is still being written", async () => {
+    const { session } = await openSession();
+    const chat = await ChatSession.open({
+      agent: scriptedAgent([]),
+      session,
+    });
+
+    const append = session.append.bind(session);
+    let releaseReset = (): void => {};
+    const resetGate = new Promise<void>((resolve) => {
+      releaseReset = resolve;
+    });
+    let markResetStarted = (): void => {};
+    const resetStarted = new Promise<void>((resolve) => {
+      markResetStarted = resolve;
+    });
+    session.append = async (event) => {
+      if (event.type === SessionEventType.Reset) {
+        markResetStarted();
+        await resetGate;
+      }
+      return append(event);
+    };
+
+    const resetting = chat.reset();
+    await resetStarted;
+    await expect(chat.ask("blocked")).rejects.toThrow(/reset/i);
+
+    releaseReset();
+    await resetting;
+    expect(chat.messages).toEqual([]);
+    expect((await session.snapshot()).messages).toEqual([]);
+  });
+
+  test("resumes with the saved compaction summary in the next request", async () => {
+    const { session, storage } = await openSession();
+    const turnId = asTurnId("turn-summary");
+    const oldMessages = turnMessages("old", "old answer");
+
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "old",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: { text: "old answer", toolCalls: [] },
+    });
+    const finished = await session.append({
+      type: SessionEventType.TurnFinished,
+      turnId,
+      status: AgentStatus.Completed,
+      output: "old answer",
+      steps: 1,
+      usage: zeroUsage(),
+      messages: oldMessages,
+    });
+    await session.append({
+      type: SessionEventType.Compaction,
+      summary: "the old answer",
+      cutoffSequence: finished.sequence,
+      tokensBefore: 10,
+      at: 2_000,
+    });
+    await session.flush();
+    await session.close();
+
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    expect((await reopened.snapshot()).messages).toEqual([]);
+
+    // The real agent merges adjacent user messages, so the committed history
+    // starts with the summary and prompt in one message.
+    const nextMessages: Message[] = [
+      { role: "user", content: "the old answer\n\ncontinue" },
+      { role: "assistant", content: "next" },
+    ];
+    const agent = scriptedAgent([
+      {
+        events: [modelEvent(1, "next")],
+        result: completed(nextMessages, "next"),
+      },
+    ]);
+    const chat = await ChatSession.open({
+      agent,
+      session: reopened,
+      createTurnId: () => asTurnId("turn-next"),
+    });
+
+    await chat.ask("continue");
+    expect(agent.runs[0]).toEqual([
+      { role: "user", content: "the old answer" },
+      { role: "user", content: "continue" },
+    ]);
+    expect(chat.messages).toEqual(nextMessages);
+    await chat.close();
+
+    // The summary is now part of committed history; reopening must not inject
+    // it a second time.
+    const resumedAgain = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    const secondAgent = scriptedAgent([
+      {
+        events: [modelEvent(1, "again")],
+        result: completed(
+          [
+            ...nextMessages,
+            { role: "user", content: "again" },
+            { role: "assistant", content: "again" },
+          ],
+          "again",
+        ),
+      },
+    ]);
+    const secondChat = await ChatSession.open({
+      agent: secondAgent,
+      session: resumedAgain,
+      createTurnId: () => asTurnId("turn-again"),
+    });
+    await secondChat.ask("again");
+    expect(secondAgent.runs[0]).toEqual([
+      ...nextMessages,
+      { role: "user", content: "again" },
+    ]);
+    await secondChat.close();
+  });
+
   test("a non-JSON model response retracts the turn without poisoning the log", async () => {
     const badMessages = turnMessages("bad", "never");
     const goodMessages = turnMessages("good", "ok");

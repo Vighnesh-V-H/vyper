@@ -212,6 +212,8 @@ export const ERROR_MESSAGES = {
     poisoned: (detail: string): string =>
       `Event log handle is poisoned: ${detail}`,
     readAfterFailure: "Cannot read an event log after a write failure",
+    streamLocked: (streamId: string): string =>
+      `Event log stream "${streamId}" is already open by another writer`,
   },
 
   sessionLog: {
@@ -248,7 +250,9 @@ export const ERROR_MESSAGES = {
   chat: {
     turnInProgress: "A chat turn is already in progress",
     resetWhileRunning: "Cannot reset a chat session while a turn is running",
+    resetInProgress: "A chat session reset is already in progress",
     closeWhileRunning: "Cannot close a chat session while a turn is running",
+    closeWhileResetting: "Cannot close a chat session while it is resetting",
   },
 
   // Provider adapters
