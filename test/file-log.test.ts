@@ -252,12 +252,12 @@ describe("FileEventLog", () => {
   test("recovers an abandoned recovery guard and lock together", async () => {
     await withDirectory(async (directory) => {
       const lockPath = join(directory, "stream-1.jsonl.lock");
-      const breakPath = `${lockPath}.break`;
+      const guardPath = `${lockPath}.guard.0`;
       await writeFile(lockPath, "", "utf8");
-      await writeFile(breakPath, "", "utf8");
+      await writeFile(guardPath, "", "utf8");
       const old = new Date(Date.now() - 120_000);
       await utimes(lockPath, old, old);
-      await utimes(breakPath, old, old);
+      await utimes(guardPath, old, old);
 
       const handle = await new FileEventLog<Payload>({
         directory,
@@ -273,31 +273,38 @@ describe("FileEventLog", () => {
     });
   });
 
-  test("allows only one writer when concurrent opens recover a stale lock", async () => {
+  test("allows only one writer when concurrent opens recover an abandoned guard and lock", async () => {
     await withDirectory(async (directory) => {
-      const lockPath = join(directory, "stream-1.jsonl.lock");
-      await writeFile(lockPath, "", "utf8");
       const old = new Date(Date.now() - 120_000);
-      await utimes(lockPath, old, old);
-
       const log = new FileEventLog<Payload>({ directory, codec });
-      const results = await Promise.allSettled([
-        log.open(streamId),
-        log.open(streamId),
-        log.open(streamId),
-      ]);
-      const opened = results.filter(
-        (result) => result.status === "fulfilled",
-      );
-      expect(opened).toHaveLength(1);
 
-      const winner = opened[0];
-      if (winner?.status !== "fulfilled") throw new Error("missing winner");
-      await winner.value.close();
+      for (let iteration = 0; iteration < 10; iteration += 1) {
+        const stream = asEventLogStreamId(`stream-${iteration}`);
+        const lockPath = join(directory, `stream-${iteration}.jsonl.lock`);
+        const guardPath = `${lockPath}.guard.0`;
+        await writeFile(lockPath, "", "utf8");
+        await writeFile(guardPath, "", "utf8");
+        await utimes(lockPath, old, old);
+        await utimes(guardPath, old, old);
 
-      for (const result of results) {
-        if (result.status === "rejected") {
-          expect(String(result.reason)).toMatch(/another writer/);
+        const results = await Promise.allSettled([
+          log.open(stream),
+          log.open(stream),
+          log.open(stream),
+        ]);
+        const opened = results.filter(
+          (result) => result.status === "fulfilled",
+        );
+        expect(opened).toHaveLength(1);
+
+        const winner = opened[0];
+        if (winner?.status !== "fulfilled") throw new Error("missing winner");
+        await winner.value.close();
+
+        for (const result of results) {
+          if (result.status === "rejected") {
+            expect(String(result.reason)).toMatch(/another writer/);
+          }
         }
       }
     });
