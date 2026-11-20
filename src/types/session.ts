@@ -278,23 +278,3 @@ export interface SessionSnapshot {
 
 export type SessionEventLog = EventLog<SessionEvent>;
 export type SessionEventLogHandle = EventLogHandle<SessionEvent>;
-
-/** Options for an unpersisted, in-process session. */
-export interface ChatSessionOptions {
-  /** Defaults to a generated id. */
-  readonly sessionId?: SessionId;
-  /**
-   * Observer for agent events. Defaults to `agent.onEvent` so a session never
-   * silently disables an application-level handler.
-   */
-  readonly onEvent?: AgentEventHandler;
-  /** Injectable turn-id factory for deterministic tests. */
-  readonly createTurnId?: () => TurnId;
-}
-
-/** Options for opening or resuming a persisted session. */
-export interface ChatSessionOpenOptions extends ChatSessionOptions {
-  readonly agent: ChatAgent;
-  readonly log: SessionEventLog;
-  readonly sessionId: SessionId;
-}
