@@ -1,9 +1,31 @@
 import type { ContextManager, TokenUsage } from "./context";
+import type { ToolCallId } from "./ids";
 import type { Message } from "./message";
 import type { Model, ModelResponse } from "./model";
 import type { ToolCatalog, ToolExecutionResult } from "./tools";
 
-export type AgentEventHandler = (event: AgentEvent) => void;
+/** Receives every event that survives interception. Errors are isolated. */
+export type AgentEventHandler = (event: AgentEvent) => void | Promise<void>;
+
+/** A read-only observer; equivalent to a handler registered with `subscribe()`. */
+export type AgentEventObserver = AgentEventHandler;
+
+/**
+ * An interceptor may rewrite the event by returning another `AgentEvent`, or
+ * stop delivery with a block decision. Returning `undefined` passes the current
+ * event to the next interceptor.
+ */
+export type AgentEventInterceptor = (
+  event: AgentEvent,
+) => AgentInterceptResult | Promise<AgentInterceptResult>;
+
+/** A terminal interception result: later interceptors and observers are skipped. */
+export interface AgentInterceptBlock {
+  readonly kind: "block";
+  readonly reason?: string;
+}
+
+export type AgentInterceptResult = AgentEvent | AgentInterceptBlock | void;
 
 /** Stages at which an agent run can fail or emit a warning. */
 export enum AgentErrorStage {
@@ -55,7 +77,7 @@ export interface AgentModelResponseEvent {
 export interface AgentToolStartEvent {
   type: AgentEventType.ToolStart;
   step: number;
-  callId: string;
+  callId: ToolCallId;
   name: string;
 }
 
@@ -112,7 +134,7 @@ export type AgentEventOfType<TType extends AgentEventType> =
 /** A callback narrowed to a single event variant. */
 export type AgentEventHandlerFor<TType extends AgentEventType> = (
   event: AgentEventOfType<TType>,
-) => void;
+) => void | Promise<void>;
 
 export interface AgentResultBase {
   /** Conversation after the run. Always valid: every tool call has a result. */
@@ -163,8 +185,10 @@ export type AgentResultOfStatus<TStatus extends AgentStatus> =
 
 export interface AgentRunOptions {
   readonly signal?: AbortSignal;
-  /** Per-run override for the agent-level event handler. */
+  /** Observer registered for this run only. */
   readonly onEvent?: AgentEventHandler;
+  /** Interceptors registered for this run only, in execution order. */
+  readonly interceptors?: readonly AgentEventInterceptor[];
 }
 
 export interface AgentOptions {
@@ -185,5 +209,13 @@ export interface AgentOptions {
   readonly toolTimeoutMs?: number;
   /** Safety cap for tool output placed in the conversation. Defaults to 100k characters. */
   readonly maxToolResultChars?: number;
+  /** Observer for every event that survives interception. */
   readonly onEvent?: AgentEventHandler;
+  /** Interceptors that may rewrite or block events, in execution order. */
+  readonly interceptors?: readonly AgentEventInterceptor[];
+  /**
+   * Receives errors from observers and interceptor failures. Defaults to
+   * `console.error`; events themselves never fail the run.
+   */
+  readonly onEventError?: (error: unknown) => void;
 }

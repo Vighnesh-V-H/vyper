@@ -7,6 +7,19 @@ export type {
   UserMessage,
 } from "./message";
 
+export {
+  asEventLogStreamId,
+  asSessionId,
+  asToolCallId,
+  asTurnId,
+} from "./ids";
+export type {
+  EventLogStreamId,
+  SessionId,
+  ToolCallId,
+  TurnId,
+} from "./ids";
+
 export { ToolExecutionErrorKind } from "./tools";
 export type {
   JsonArraySchema,
@@ -14,6 +27,7 @@ export type {
   JsonIntegerSchema,
   JsonNullSchema,
   JsonNumberSchema,
+  JsonObject,
   JsonObjectSchema,
   JsonPrimitive,
   JsonSchema,
@@ -53,9 +67,13 @@ export type {
   AgentEventHandler,
   AgentEventHandlerFor,
   AgentEventMap,
+  AgentEventObserver,
   AgentEventOfType,
+  AgentEventInterceptor,
   AgentEvent,
   AgentFailedResult,
+  AgentInterceptBlock,
+  AgentInterceptResult,
   AgentMaxStepsResult,
   AgentModelResponseEvent,
   AgentOptions,
@@ -96,3 +114,47 @@ export type {
   TokenMeter,
   TokenUsage,
 } from "./context";
+
+export type {
+  EventLog,
+  EventLogCodec,
+  EventLogHandle,
+  EventLogRecord,
+} from "./event-log";
+
+export { SessionEventType } from "./session";
+export type {
+  ChatAgent,
+  ChatSessionOpenOptions,
+  ChatSessionOptions,
+  CompactionEntry,
+  MetadataChanged,
+  PersistedModelResponse,
+  PersistedToolCall,
+  Retraction,
+  SessionContextPreparedEvent,
+  SessionErrorEvent,
+  SessionErrorInfo,
+  SessionEvent,
+  SessionEventHandlerFor,
+  SessionEventLog,
+  SessionEventLogHandle,
+  SessionEventMap,
+  SessionEventOfType,
+  SessionHeader,
+  SessionHeaderEvent,
+  SessionMetadata,
+  SessionMetadataChangedEvent,
+  SessionModelRespondedEvent,
+  SessionResetEvent,
+  SessionRetractionEvent,
+  SessionSnapshot,
+  SessionStepStartedEvent,
+  SessionToolCompletedEvent,
+  SessionToolStartedEvent,
+  SessionTurnAbortedEvent,
+  SessionTurnCommittedEvent,
+  SessionTurnFinishedEvent,
+  SessionTurnStartedEvent,
+  SessionWarningEvent,
+} from "./session";

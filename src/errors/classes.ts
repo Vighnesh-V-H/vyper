@@ -118,6 +118,28 @@ export class ToolTimeoutError extends VyperError {
   }
 }
 
+// Event log and session persistence
+
+/** A malformed, non-JSON, or poisoned event-log operation. */
+export class EventLogError extends VyperError {
+  constructor(
+    message: string,
+    code:
+      | ErrorCode.EventLogInvalid
+      | ErrorCode.EventLogPoisoned = ErrorCode.EventLogInvalid,
+    options?: ErrorOptions,
+  ) {
+    super(code, message, options);
+  }
+}
+
+/** A session event violated recording or replay invariants. */
+export class SessionLogError extends VyperError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(ErrorCode.SessionLogInvalid, message, options);
+  }
+}
+
 // Provider adapters
 
 /** A provider request could not be completed. */

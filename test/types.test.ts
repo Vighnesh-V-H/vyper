@@ -7,14 +7,21 @@ import {
   requiredNonBlankString,
 } from "../src/tools/arguments";
 import { defineTool } from "../src/tools/define-tool";
-import { AgentEventType, AgentStatus } from "../src/types";
+import { AgentEventType, AgentStatus, asToolCallId } from "../src/types";
 import type {
   AgentEventOfType,
   AgentFailedResult,
+  AgentModelResponseEvent,
   AgentResultOfStatus,
   AgentToolResultEvent,
+  EventLogStreamId,
+  JsonObject,
   JsonObjectSchema,
   JsonSchemaValue,
+  PersistedToolCall,
+  SessionId,
+  ToolCallId,
+  TurnId,
 } from "../src/types";
 import { omitUndefined } from "../src/util/omit-undefined";
 
@@ -147,6 +154,26 @@ type _FailedResult = Assert<
 >;
 type _NamespacedCodes = Assert<ErrorCode extends ErrorCodeShape ? true : false>;
 
+/** The live agent event union keeps untrusted arguments as a plain record. */
+type _LiveToolArguments = Assert<
+  Equal<
+    AgentModelResponseEvent["response"]["toolCalls"][number]["arguments"],
+    Record<string, unknown>
+  >
+>;
+
+/** The persisted view narrows arguments after codec validation. */
+type _PersistedToolArguments = Assert<
+  Equal<PersistedToolCall["arguments"], JsonObject>
+>;
+
+type _SessionIdIsString = Assert<SessionId extends string ? true : false>;
+type _TurnIdIsString = Assert<TurnId extends string ? true : false>;
+type _ToolCallIdIsString = Assert<ToolCallId extends string ? true : false>;
+type _StreamIdIsString = Assert<
+  EventLogStreamId extends string ? true : false
+>;
+
 describe("type-level contracts", () => {
   test("defineTool infers arguments from its schema", () => {
     expect(echo.parse({ text: "a", count: 2 })).toEqual({
@@ -161,7 +188,7 @@ describe("type-level contracts", () => {
     const event: AgentEventOfType<AgentEventType.ToolStart> = {
       type: AgentEventType.ToolStart,
       step: 1,
-      callId: "call-1",
+      callId: asToolCallId("call-1"),
       name: "clock",
     };
     expect(event.type).toBe(AgentEventType.ToolStart);

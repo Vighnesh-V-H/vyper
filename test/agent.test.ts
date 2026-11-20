@@ -5,6 +5,7 @@ import { clockTool } from "../src/tools/builtin/clock";
 import { ToolRegistry } from "../src/tools/registry";
 import { AgentErrorStage, AgentEventType, AgentStatus } from "../src/types/agent";
 import type { ContextManager, PrepareContextInput, PreparedContext } from "../src/types/context";
+import { asToolCallId } from "../src/types/ids";
 import type { Model, ModelResponse } from "../src/types/model";
 
 const cwd = process.cwd();
@@ -41,7 +42,7 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: "call-1", name: "clock", arguments: {} }],
+          toolCalls: [{ id: asToolCallId("call-1"), name: "clock", arguments: {} }],
         },
         {
           text: "final answer",
@@ -53,7 +54,9 @@ describe("Agent", () => {
       tools,
       context,
       cwd,
-      onEvent: (event) => events.push(event.type),
+      onEvent: (event) => {
+        events.push(event.type);
+      },
     });
 
     const result = await agent.run("hello");
@@ -81,7 +84,7 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: "call-1", name: "missing", arguments: {} }],
+          toolCalls: [{ id: asToolCallId("call-1"), name: "missing", arguments: {} }],
         },
         { text: "recovered", toolCalls: [] },
       ]),
@@ -139,7 +142,7 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: "call-1", name: "clock", arguments: {} }],
+          toolCalls: [{ id: asToolCallId("call-1"), name: "clock", arguments: {} }],
         },
       ]),
       instructions: "test",

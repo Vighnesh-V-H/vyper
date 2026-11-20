@@ -4,6 +4,7 @@ import {
   ProviderResponseError,
 } from "../errors";
 import type { TokenUsage } from "../types/context";
+import { asToolCallId } from "../types/ids";
 import type { Message, ToolCall } from "../types/message";
 import type {
   Model,
@@ -249,9 +250,9 @@ function readToolCall(
     );
   }
 
-  const id = isNonEmptyString(call.id)
-    ? call.id
-    : `gemini_${crypto.randomUUID()}`;
+  const id = asToolCallId(
+    isNonEmptyString(call.id) ? call.id : `gemini_${crypto.randomUUID()}`,
+  );
 
   if (isNonEmptyString(part.thoughtSignature)) {
     signatures.set(id, part.thoughtSignature);

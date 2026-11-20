@@ -34,15 +34,18 @@ export interface ToolExecutionEngineOptions {
 
 export interface ToolExecutionCallbacks {
   /** Called when a call enters the executor, including cancelled/unknown calls. */
-  readonly onStart?: (request: ToolExecutionRequest) => void;
+  readonly onStart?: (request: ToolExecutionRequest) => void | Promise<void>;
   /** Called as each result settles, in completion order. */
-  readonly onResult?: (result: ToolExecutionResult) => void;
+  readonly onResult?: (result: ToolExecutionResult) => void | Promise<void>;
 }
 
-function notify<T>(callback: ((value: T) => void) | undefined, value: T): void {
+async function notify<T>(
+  callback: ((value: T) => void | Promise<void>) | undefined,
+  value: T,
+): Promise<void> {
   if (!callback) return;
   try {
-    callback(value);
+    await callback(value);
   } catch {
     // Observability callbacks must not affect execution.
   }
@@ -124,16 +127,22 @@ export class ToolExecutionEngine {
     context: ToolContext,
     callbacks?: ToolExecutionCallbacks,
   ): Promise<ToolExecutionResult> {
-    notify(callbacks?.onStart, request);
+
+    await notify(callbacks?.onStart, request);
+
     const startedAt = Date.now();
-    const complete = (result: ToolExecutionResult): ToolExecutionResult => {
-      notify(callbacks?.onResult, result);
+
+    const complete = async (
+      result: ToolExecutionResult,
+    ): Promise<ToolExecutionResult> => {
+      await notify(callbacks?.onResult, result);
       return result;
     };
+
     const fail = (
       kind: ToolExecutionErrorKind,
       content: string,
-    ): ToolExecutionResult =>
+    ): Promise<ToolExecutionResult> =>
       complete({
         callId: request.callId,
         name: request.name,
@@ -142,7 +151,8 @@ export class ToolExecutionEngine {
         errorKind: kind,
         durationMs: Date.now() - startedAt,
       });
-    const cancelled = (): ToolExecutionResult =>
+
+    const cancelled = (): Promise<ToolExecutionResult> =>
       fail(
         ToolExecutionErrorKind.Cancelled,
         ERROR_MESSAGES.tools.executionCancelled,

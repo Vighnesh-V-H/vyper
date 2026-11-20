@@ -1,3 +1,4 @@
+import type { SessionId } from "./ids";
 import type { Message } from "./message";
 
 export interface TokenUsage {
@@ -130,7 +131,7 @@ export interface ContextCheckpoint {
 
 export interface ContextStore {
   save(checkpoint: ContextCheckpoint): Promise<void>;
-  latest(sessionId: string): Promise<ContextCheckpoint | null>;
+  latest(sessionId: SessionId): Promise<ContextCheckpoint | null>;
 }
 
 interface ContextSourceBase {

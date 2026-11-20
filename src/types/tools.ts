@@ -1,3 +1,4 @@
+import type { ToolCallId } from "./ids";
 import type { JsonObjectSchema } from "./json-schema";
 import type { UserMessage } from "./message";
 
@@ -7,6 +8,7 @@ export type {
   JsonIntegerSchema,
   JsonNullSchema,
   JsonNumberSchema,
+  JsonObject,
   JsonObjectSchema,
   JsonPrimitive,
   JsonSchema,
@@ -24,8 +26,8 @@ export interface ToolSchema {
 
 /** A single tool call before execution. Arguments are still untrusted here. */
 export interface ToolExecutionRequest {
-  readonly callId: string;
-  readonly rootCallId?: string;
+  readonly callId: ToolCallId;
+  readonly rootCallId?: ToolCallId;
   readonly name: string;
   readonly arguments: unknown;
 }
@@ -79,7 +81,7 @@ export enum ToolExecutionErrorKind {
 }
 
 export interface ToolExecutionResult {
-  readonly callId: string;
+  readonly callId: ToolCallId;
   readonly name: string;
   readonly content: string;
   readonly isError: boolean;

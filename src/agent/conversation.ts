@@ -3,6 +3,7 @@ import {
   ERROR_MESSAGES,
   InvalidToolCallsError,
 } from "../errors";
+import type { ToolCallId } from "../types/ids";
 import type { Message, ToolCall } from "../types/message";
 import { isNonEmptyString } from "../util/is-non-empty-string";
 import { parseToolCalls } from "./tool-calls";
@@ -144,8 +145,8 @@ function validateToolResults(
  * Validate caller-supplied history before it reaches a provider. This keeps
  * malformed assistant/tool pairs from becoming opaque provider 400s.
  */
-export function validateConversation(messages: readonly Message[]): Set<string> {
-  const seenToolCallIds = new Set<string>();
+export function validateConversation(messages: readonly Message[]): Set<ToolCallId> {
+  const seenToolCallIds = new Set<ToolCallId>();
 
   for (let index = 0; index < messages.length; ) {
     const message = messages[index];

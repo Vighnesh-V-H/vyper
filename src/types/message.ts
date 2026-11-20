@@ -1,3 +1,5 @@
+import type { ToolCallId } from "./ids";
+
 export interface SystemMessage {
   role: "system";
   content: string;
@@ -16,7 +18,7 @@ export interface AssistantMessage {
 
 export interface ToolMessage {
   role: "tool";
-  toolCallId: string;
+  toolCallId: ToolCallId;
   content: string;
 }
 
@@ -27,7 +29,8 @@ export type Message =
   | ToolMessage;
 
 export interface ToolCall {
-  id: string;
+  id: ToolCallId;
   name: string;
+  /** Agent-side arguments stay untrusted until a tool parser or codec reads them. */
   arguments: Record<string, unknown>;
 }

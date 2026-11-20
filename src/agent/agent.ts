@@ -11,11 +11,13 @@ import { AgentErrorStage, AgentEventType, AgentStatus } from "../types/agent";
 import type {
   AgentEvent,
   AgentEventHandler,
+  AgentEventInterceptor,
   AgentOptions,
   AgentResult,
   AgentRunOptions,
 } from "../types/agent";
 import type { ContextManager, PreparedContext, TokenUsage } from "../types/context";
+import type { ToolCallId } from "../types/ids";
 import type { Message, ToolCall, UserMessage } from "../types/message";
 import type { Model, ModelResponse, ModelTool } from "../types/model";
 import { ToolExecutionErrorKind } from "../types/tools";
@@ -31,6 +33,7 @@ import {
   normalizeConversation,
   validateConversation,
 } from "./conversation";
+import { AgentEventChannels } from "./events";
 import { readResponseUsage, validateModelResponse } from "./model-response";
 
 const DEFAULT_MAX_STEPS = 32;
@@ -85,7 +88,7 @@ function cloneToolResultForEvent(result: ToolExecutionResult): ToolExecutionResu
 }
 
 function syntheticToolResult(
-  callId: string,
+  callId: ToolCallId,
   name: string,
   content: string,
   errorKind:
@@ -130,6 +133,20 @@ function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
   if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
     throw new ConfigurationError(ERROR_MESSAGES.agent.onEventMustBeFunction);
   }
+  if (options.onEventError !== undefined && typeof options.onEventError !== "function") {
+    throw new ConfigurationError(
+      ERROR_MESSAGES.agent.onEventErrorMustBeFunction,
+    );
+  }
+  if (
+    options.interceptors !== undefined &&
+    (!Array.isArray(options.interceptors) ||
+      options.interceptors.some((interceptor) => typeof interceptor !== "function"))
+  ) {
+    throw new ConfigurationError(
+      ERROR_MESSAGES.agent.interceptorsMustBeFunctions,
+    );
+  }
 
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   if (!Number.isInteger(maxSteps) || maxSteps <= 0) {
@@ -150,7 +167,7 @@ function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
 
 interface PreparedStep {
   readonly messages: Message[];
-  readonly toolCallIds: Set<string>;
+  readonly toolCallIds: Set<ToolCallId>;
   readonly system: string;
   readonly compacted: boolean;
   readonly tokensEstimated: number;
@@ -180,7 +197,7 @@ function validatePreparedContext(
   }
 
   let messages: Message[];
-  let toolCallIds: Set<string>;
+  let toolCallIds: Set<ToolCallId>;
   try {
     messages = normalizeConversation(prepared.messages);
     toolCallIds = validateConversation(messages);
@@ -240,7 +257,9 @@ export class Agent {
   readonly cwd: string;
   readonly maxSteps: number;
   readonly engineOptions: ToolExecutionEngineOptions;
+  /** Convenience view of the constructor observer, kept for compatibility. */
   readonly onEvent: AgentEventHandler | undefined;
+  readonly #events: AgentEventChannels;
 
   constructor(options: AgentOptions) {
     const { maxSteps, engineOptions } = normalizeAgentOptions(options);
@@ -253,10 +272,29 @@ export class Agent {
     this.maxSteps = maxSteps;
     this.onEvent = options.onEvent;
     this.engineOptions = engineOptions;
+    this.#events = new AgentEventChannels(
+      options.onEventError === undefined
+        ? {}
+        : { onError: options.onEventError },
+    );
+    if (options.onEvent !== undefined) this.#events.subscribe(options.onEvent);
+    for (const interceptor of options.interceptors ?? []) {
+      this.#events.intercept(interceptor);
+    }
 
     // Fail fast on invalid execution options; runs build an engine from a
     // catalog snapshot instead of this throwaway instance.
     new ToolExecutionEngine(options.tools, engineOptions);
+  }
+
+  /** Register a read-only observer. The returned function unsubscribes. */
+  subscribe(handler: AgentEventHandler): () => void {
+    return this.#events.subscribe(handler);
+  }
+
+  /** Register an interceptor. The returned function unsubscribes. */
+  intercept(interceptor: AgentEventInterceptor): () => void {
+    return this.#events.intercept(interceptor);
   }
 
   /**
@@ -290,9 +328,20 @@ export class Agent {
         ERROR_MESSAGES.agent.runOnEventMustBeFunction,
       );
     }
+    if (
+      options.interceptors !== undefined &&
+      (!Array.isArray(options.interceptors) ||
+        options.interceptors.some(
+          (interceptor) => typeof interceptor !== "function",
+        ))
+    ) {
+      throw new ConfigurationError(
+        ERROR_MESSAGES.agent.interceptorsMustBeFunctions,
+      );
+    }
 
     let history: Message[];
-    let usedToolCallIds: Set<string>;
+    let usedToolCallIds: Set<ToolCallId>;
     if (typeof input === "string") {
       history = [{ role: "user", content: input }];
       usedToolCallIds = new Set();
@@ -304,18 +353,16 @@ export class Agent {
     const signal = options.signal ?? new AbortController().signal;
     const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let steps = 0;
+    const runObservers =
+      options.onEvent === undefined ? undefined : [options.onEvent];
 
-    const eventHandler = options.onEvent ?? this.onEvent;
-    const emit = (event: AgentEvent): void => {
-      if (typeof eventHandler !== "function") return;
-      try {
-        eventHandler(event);
-      } catch {
-        // Observability must not change agent behavior or corrupt state.
-      }
-    };
-    const finish = (result: AgentResult): AgentResult => {
-      emit({
+    const emit = (event: AgentEvent): Promise<void> =>
+      this.#events.emit(event, {
+        observers: runObservers,
+        interceptors: options.interceptors,
+      });
+    const finish = async (result: AgentResult): Promise<AgentResult> => {
+      await emit({
         type: AgentEventType.Stop,
         status: result.status,
         steps: result.steps,
@@ -328,16 +375,16 @@ export class Agent {
       steps,
       usage,
     });
-    const completed = (output: string): AgentResult =>
+    const completed = (output: string): Promise<AgentResult> =>
       finish({ status: AgentStatus.Completed, ...resultBase(output) });
-    const maxStepsReached = (output: string): AgentResult =>
+    const maxStepsReached = (output: string): Promise<AgentResult> =>
       finish({ status: AgentStatus.MaxSteps, ...resultBase(output) });
-    const fail = (
+    const fail = async (
       stage: AgentErrorStage,
       error: Error,
       errorStep = steps,
-    ): AgentResult => {
-      emit({ type: AgentEventType.Error, step: errorStep, stage, error });
+    ): Promise<AgentResult> => {
+      await emit({ type: AgentEventType.Error, step: errorStep, stage, error });
       return finish({
         status: AgentStatus.Error,
         stage,
@@ -345,19 +392,19 @@ export class Agent {
         ...resultBase(error.message),
       });
     };
-    const aborted = (): AgentResult =>
+    const aborted = (): Promise<AgentResult> =>
       finish({
         status: AgentStatus.Aborted,
         ...resultBase(ERROR_MESSAGES.agent.runAborted),
       });
-    const appendSyntheticToolResults = (
+    const appendSyntheticToolResults = async (
       step: number,
       calls: readonly ToolCall[],
       content: string,
       errorKind:
         | ToolExecutionErrorKind.Cancelled
         | ToolExecutionErrorKind.Execution,
-    ): void => {
+    ): Promise<void> => {
       for (const call of calls) {
         const result = syntheticToolResult(
           call.id,
@@ -370,7 +417,7 @@ export class Agent {
           toolCallId: call.id,
           content: result.content,
         });
-        emit({
+        await emit({
           type: AgentEventType.ToolResult,
           step,
           result: cloneToolResultForEvent(result),
@@ -395,7 +442,7 @@ export class Agent {
 
       const step = steps + 1;
       const finalStep = step === this.maxSteps;
-      emit({ type: AgentEventType.StepStart, step });
+      await emit({ type: AgentEventType.StepStart, step });
 
       let stepContext: PreparedStep;
       try {
@@ -414,7 +461,7 @@ export class Agent {
 
       history = stepContext.messages;
       usedToolCallIds = stepContext.toolCallIds;
-      emit({
+      await emit({
         type: AgentEventType.ContextPrepared,
         step,
         compacted: stepContext.compacted,
@@ -468,7 +515,7 @@ export class Agent {
         try {
           this.context.observe(response.usage, [...history]);
         } catch (error) {
-          emit({
+          await emit({
             type: AgentEventType.Warning,
             step,
             stage: AgentErrorStage.Context,
@@ -477,17 +524,12 @@ export class Agent {
         }
       }
 
-      // Cloning keeps event handlers from mutating conversation state. emit()
-      // already swallows handler errors, but cloning itself is best effort too.
-      try {
-        emit({
-          type: AgentEventType.ModelResponse,
-          step,
-          response: cloneResponseForEvent(response),
-        });
-      } catch {
-        // Observability must not fail the run.
-      }
+      // Cloning keeps event handlers from mutating conversation state.
+      await emit({
+        type: AgentEventType.ModelResponse,
+        step,
+        response: cloneResponseForEvent(response),
+      });
       if (signal.aborted) return aborted();
 
       const text = response.text ?? "";
@@ -503,7 +545,7 @@ export class Agent {
       }
 
       if (finalStep) {
-        emit({
+        await emit({
           type: AgentEventType.Warning,
           step,
           stage: AgentErrorStage.Response,
@@ -568,7 +610,7 @@ export class Agent {
       } catch (error) {
         const failure = toError(error);
         if (signal.aborted) {
-          appendSyntheticToolResults(
+          await appendSyntheticToolResults(
             step,
             response.toolCalls,
             ERROR_MESSAGES.tools.executionCancelled,
@@ -577,7 +619,7 @@ export class Agent {
           return aborted();
         }
 
-        appendSyntheticToolResults(
+        await appendSyntheticToolResults(
           step,
           response.toolCalls,
           ERROR_MESSAGES.agent.toolExecutionFailed(failure.message),
@@ -588,7 +630,7 @@ export class Agent {
 
       // validateModelResponse guarantees unique call ids, so this map cannot
       // collapse two different calls.
-      const resultsById = new Map<string, ToolExecutionResult>();
+      const resultsById = new Map<ToolCallId, ToolExecutionResult>();
       for (const result of results) resultsById.set(result.callId, result);
       for (const call of response.toolCalls) {
         let result = resultsById.get(call.id);
@@ -599,7 +641,7 @@ export class Agent {
             ERROR_MESSAGES.agent.missingToolResult,
             ToolExecutionErrorKind.Execution,
           );
-          emit({
+          await emit({
             type: AgentEventType.ToolResult,
             step,
             result: cloneToolResultForEvent(result),

@@ -14,6 +14,9 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/** A JSON object whose values are recursively JSON-safe. */
+export type JsonObject = { [key: string]: JsonValue };
+
 interface JsonSchemaBase {
   readonly description?: string;
 }

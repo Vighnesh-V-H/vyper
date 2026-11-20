@@ -6,7 +6,25 @@ export * from "./errors";
 export * from "./types";
 
 export { Agent } from "./agent/agent";
+export { AgentEventChannels } from "./agent/events";
+export type {
+  AgentEventChannelOptions,
+  AgentEventDispatchExtras,
+} from "./agent/events";
 export { validateModelResponse } from "./agent/model-response";
+
+export { MemoryEventLog } from "./event-log/memory";
+export type { MemoryEventLogOptions } from "./event-log/memory";
+
+export {
+  assertJsonSafeSessionEvent,
+  persistedModelResponse,
+  readJsonObject,
+  readJsonValue,
+  SessionEventCodec,
+} from "./session/codec";
+export { replaySession, SessionLog } from "./session/log";
+export type { SessionLogOpenOptions } from "./session/log";
 
 export { ToolRegistry } from "./tools/registry";
 export { ToolExecutionEngine, executeTool } from "./tools/executor";

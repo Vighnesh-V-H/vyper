@@ -24,6 +24,9 @@ export enum ErrorCode {
   ToolExecutionFailed = "tool/execution-failed",
   ToolCancelled = "tool/cancelled",
   ToolTimeout = "tool/timeout",
+  EventLogInvalid = "event-log/invalid",
+  EventLogPoisoned = "event-log/poisoned",
+  SessionLogInvalid = "session-log/invalid",
 }
 
 /** Codes accepted by ConfigurationError. */

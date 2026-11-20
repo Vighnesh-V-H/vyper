@@ -5,6 +5,7 @@ import { executeTool } from "../src/tools/executor";
 import { ToolRegistry } from "../src/tools/registry";
 import { validateToolDefinition } from "../src/tools/validation";
 import { ToolExecutionErrorKind } from "../src/types";
+import { asToolCallId } from "../src/types/ids";
 
 const catalog = new ToolRegistry([clockTool, read]);
 const cwd = process.cwd();
@@ -31,7 +32,7 @@ describe("tool argument validation", () => {
 describe("tool execution", () => {
   test("executes a valid tool", async () => {
     const result = await executeTool(catalog, {
-      callId: "clock-1",
+      callId: asToolCallId("clock-1"),
       name: "clock",
       arguments: {},
       cwd,
@@ -44,7 +45,7 @@ describe("tool execution", () => {
 
   test("reports unknown tools", async () => {
     const result = await executeTool(catalog, {
-      callId: "missing-1",
+      callId: asToolCallId("missing-1"),
       name: "missing",
       arguments: {},
       cwd,
@@ -57,7 +58,7 @@ describe("tool execution", () => {
 
   test("reports invalid arguments", async () => {
     const result = await executeTool(catalog, {
-      callId: "read-1",
+      callId: asToolCallId("read-1"),
       name: "read",
       arguments: {},
       cwd,
@@ -88,7 +89,7 @@ describe("tool execution", () => {
 
   test("rejects paths outside the working directory", async () => {
     const result = await executeTool(catalog, {
-      callId: "read-2",
+      callId: asToolCallId("read-2"),
       name: "read",
       arguments: { path: "../outside.txt" },
       cwd,

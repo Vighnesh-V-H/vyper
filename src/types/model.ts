@@ -1,4 +1,5 @@
 import type { TokenUsage } from "./context";
+import type { ToolCallId } from "./ids";
 import type { JsonObjectSchema } from "./json-schema";
 import type { Message, ToolCall } from "./message";
 
@@ -36,7 +37,7 @@ export interface TextDeltaChunk {
 
 export interface ToolCallDeltaChunk {
   type: ModelStreamChunkType.ToolCallDelta;
-  toolCallId: string;
+  toolCallId: ToolCallId;
   name?: string;
   argumentsDelta?: string;
 }

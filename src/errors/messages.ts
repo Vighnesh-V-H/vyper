@@ -26,6 +26,10 @@ export const ERROR_MESSAGES = {
     instructionsMustBeString: "AgentOptions.instructions must be a string",
     cwdMustBeNonEmptyString: "AgentOptions.cwd must be a non-empty string",
     onEventMustBeFunction: "AgentOptions.onEvent must be a function",
+    onEventErrorMustBeFunction:
+      "AgentOptions.onEventError must be a function",
+    interceptorsMustBeFunctions:
+      "Agent interceptors must be an array of functions",
     maxStepsMustBePositiveInteger:
       "AgentOptions.maxSteps must be a positive integer",
     inputMustBeStringOrMessages:
@@ -199,6 +203,37 @@ export const ERROR_MESSAGES = {
       `Tool ${name} failed to render its result: ${detail}`,
     renderMustReturnString: (name: string): string =>
       `Tool ${name} render() must return a string`,
+  },
+
+  // Event log and session persistence
+  eventLog: {
+    invalidRecord: (detail: string): string =>
+      `Invalid event log record: ${detail}`,
+    poisoned: (detail: string): string =>
+      `Event log handle is poisoned: ${detail}`,
+    readAfterFailure: "Cannot read an event log after a write failure",
+  },
+
+  sessionLog: {
+    missingHeader: "Session log must start with a header at sequence 1",
+    headerMustBeFirst: "Session header must be sequence 1",
+    headerImmutable: "Session header cannot be rewritten or appended twice",
+    metadataMustChange: "MetadataChanged must change at least one field",
+    turnFinishedMismatch: (
+      turnId: string,
+      field: string,
+      expected: string,
+      received: string,
+    ): string =>
+      `TurnFinished for ${turnId} has ${field}=${received}; recorded events require ${expected}`,
+    retractionTargetMissing: (sequence: number): string =>
+      `Retraction target sequence ${sequence} does not exist`,
+    retractionTargetInvalid: (sequence: number): string =>
+      `Sequence ${sequence} cannot be retracted`,
+    retractionTargetAlreadyRetracted: (sequence: number): string =>
+      `Sequence ${sequence} was already retracted`,
+    compactionCutoffInvalid: (cutoff: number, sequence: number): string =>
+      `Compaction cutoff ${cutoff} must be below its own sequence ${sequence}`,
   },
 
   // Provider adapters
