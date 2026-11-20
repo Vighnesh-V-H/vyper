@@ -234,6 +234,21 @@ export const ERROR_MESSAGES = {
       `Sequence ${sequence} was already retracted`,
     compactionCutoffInvalid: (cutoff: number, sequence: number): string =>
       `Compaction cutoff ${cutoff} must be below its own sequence ${sequence}`,
+    turnAlreadyFinished: (turnId: string): string =>
+      `Turn ${turnId} already has a TurnFinished record`,
+  },
+
+  sessionRecorder: {
+    turnAlreadyActive: "A session turn is already being recorded",
+    noActiveTurn: "No session turn is being recorded",
+    recordingFailed: (detail: string): string =>
+      `Session event recording failed: ${detail}`,
+  },
+
+  chat: {
+    turnInProgress: "A chat turn is already in progress",
+    resetWhileRunning: "Cannot reset a chat session while a turn is running",
+    closeWhileRunning: "Cannot close a chat session while a turn is running",
   },
 
   // Provider adapters

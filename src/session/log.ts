@@ -8,6 +8,7 @@ import {
 import type {
   EventLogRecord,
 } from "../types/event-log";
+import { AgentStatus } from "../types/agent";
 import { asEventLogStreamId } from "../types/ids";
 import type { SessionId, TurnId } from "../types/ids";
 import type { JsonObject } from "../types/json-schema";
@@ -47,6 +48,17 @@ export interface SessionLogOpenOptions {
   /** Injectable codec for adapters that share a different schema version. */
   readonly codec?: SessionEventCodec;
 }
+
+/**
+ * Final status of a recorded turn. Completed/max-steps turns commit a full
+ * message snapshot; aborted turns keep the previously committed snapshot.
+ */
+export type FinishTurnInput =
+  | {
+      readonly status: AgentStatus.Completed | AgentStatus.MaxSteps;
+      readonly messages: readonly Message[];
+    }
+  | { readonly status: AgentStatus.Aborted };
 
 function eventTurnId(event: SessionEvent): TurnId | undefined {
   switch (event.type) {
@@ -248,6 +260,8 @@ export function replaySession(
   let activeTurnSequence: number | undefined;
   let lastSequence = 0;
   let expectedSequence = 1;
+  /** All events seen so far, including retracted ones, for finish validation. */
+  const processed: SessionEvent[] = [];
 
   for (const record of records) {
     if (record.sequence !== expectedSequence) {
@@ -258,6 +272,7 @@ export function replaySession(
     expectedSequence += 1;
     lastSequence = record.sequence;
     const event = record.event;
+    processed.push(event);
 
     if (event.type === SessionEventType.Header) {
       if (record.sequence !== 1 || header !== undefined) {
@@ -342,6 +357,9 @@ export function replaySession(
         break;
 
       case SessionEventType.TurnFinished:
+        // Re-validate on replay: the store is a trust boundary, so a manually
+        // corrupted finish must not silently replace committed history.
+        assertTurnFinishedMatches(event, processed);
         if (event.status !== "aborted" && "messages" in event) {
           messages = [...event.messages];
           messagesSequence = record.sequence;
@@ -414,62 +432,92 @@ export class SessionLog {
       );
     }
     const codec = options.codec ?? new SessionEventCodec();
+    const expectedVersion = options.version ?? codec.version;
+    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) {
+      throw new SessionLogError(
+        ERROR_MESSAGES.eventLog.invalidRecord(
+          "session version must be a positive integer",
+        ),
+      );
+    }
+
     const streamId = asEventLogStreamId(options.sessionId);
     const handle = await options.log.open(streamId);
 
-    const events: SessionEvent[] = [];
-    for await (const record of handle.read()) {
-      if (record.streamId !== streamId) {
+    try {
+      const events: SessionEvent[] = [];
+      for await (const record of handle.read()) {
+        if (record.streamId !== streamId) {
+          throw new SessionLogError(
+            ERROR_MESSAGES.eventLog.invalidRecord("stream id mismatch"),
+          );
+        }
+        if (record.version !== codec.version) {
+          throw new SessionLogError(
+            ERROR_MESSAGES.eventLog.invalidRecord(
+              `unsupported version ${record.version}`,
+            ),
+          );
+        }
+        if (record.sequence !== events.length + 1) {
+          throw new SessionLogError(
+            ERROR_MESSAGES.eventLog.invalidRecord(
+              "sequences must be contiguous",
+            ),
+          );
+        }
+        const event = codec.decode(record.event);
+        if (event.type === SessionEventType.Header && events.length > 0) {
+          throw new SessionLogError(
+            ERROR_MESSAGES.sessionLog.headerMustBeFirst,
+          );
+        }
+        events.push(event);
+      }
+
+      if (events.length === 0) {
+        const header: SessionHeaderEvent = omitUndefined({
+          type: SessionEventType.Header,
+          sessionId: options.sessionId,
+          version: expectedVersion,
+          timestamp: (options.now ?? Date.now)(),
+          model: options.model,
+          instructions: options.instructions,
+          cwd: options.cwd,
+          appConfig: options.appConfig,
+        });
+        assertJsonSafeSessionEvent(header);
+        await handle.append(header);
+        await handle.flush();
+        return new SessionLog(options.sessionId, handle, codec, [header]);
+      }
+
+      const first = events[0];
+      if (first?.type !== SessionEventType.Header) {
+        throw new SessionLogError(ERROR_MESSAGES.sessionLog.missingHeader);
+      }
+      if (first.sessionId !== options.sessionId) {
         throw new SessionLogError(
-          ERROR_MESSAGES.eventLog.invalidRecord("stream id mismatch"),
+          ERROR_MESSAGES.eventLog.invalidRecord("session id mismatch"),
         );
       }
-      if (record.version !== codec.version) {
+      if (first.version !== expectedVersion) {
         throw new SessionLogError(
           ERROR_MESSAGES.eventLog.invalidRecord(
-            `unsupported version ${record.version}`,
+            `unsupported session version ${first.version}`,
           ),
         );
       }
-      if (record.sequence !== events.length + 1) {
-        throw new SessionLogError(
-          ERROR_MESSAGES.eventLog.invalidRecord("sequences must be contiguous"),
-        );
+      return new SessionLog(options.sessionId, handle, codec, events);
+    } catch (error) {
+      // Never leak an opened stream when validation or header creation fails.
+      try {
+        await handle.close();
+      } catch {
+        // The original failure is the useful one.
       }
-      const event = codec.decode(record.event);
-      if (event.type === SessionEventType.Header && events.length > 0) {
-        throw new SessionLogError(ERROR_MESSAGES.sessionLog.headerMustBeFirst);
-      }
-      events.push(event);
+      throw error;
     }
-
-    if (events.length === 0) {
-      const header: SessionHeaderEvent = omitUndefined({
-        type: SessionEventType.Header,
-        sessionId: options.sessionId,
-        version: options.version ?? codec.version,
-        timestamp: (options.now ?? Date.now)(),
-        model: options.model,
-        instructions: options.instructions,
-        cwd: options.cwd,
-        appConfig: options.appConfig,
-      });
-      assertJsonSafeSessionEvent(header);
-      await handle.append(header);
-      await handle.flush();
-      return new SessionLog(options.sessionId, handle, codec, [header]);
-    }
-
-    const first = events[0];
-    if (first?.type !== SessionEventType.Header) {
-      throw new SessionLogError(ERROR_MESSAGES.sessionLog.missingHeader);
-    }
-    if (first.sessionId !== options.sessionId) {
-      throw new SessionLogError(
-        ERROR_MESSAGES.eventLog.invalidRecord("session id mismatch"),
-      );
-    }
-    return new SessionLog(options.sessionId, handle, codec, events);
   }
 
   get nextSequence(): number {
@@ -477,12 +525,79 @@ export class SessionLog {
   }
 
   append(event: SessionEvent): Promise<EventLogRecord<SessionEvent>> {
-    const operation = this.#queue.then(() => this.#append(event));
-    this.#queue = operation.then(
+    return this.#enqueue(() => this.#append(event));
+  }
+
+  /**
+   * Derive a finished turn's `output`, `steps`, and `usage` from the
+   * ModelResponded events already recorded, then append the result atomically.
+   * Callers cannot submit fields that disagree with the log.
+   */
+  finishTurn(
+    turnId: TurnId,
+    input: FinishTurnInput,
+  ): Promise<EventLogRecord<SessionEvent>> {
+    return this.#enqueue(async () => {
+      this.#assertWritable();
+      if (!this.#events.some((item) => eventTurnId(item) === turnId)) {
+        throw new SessionLogError(
+          ERROR_MESSAGES.eventLog.invalidRecord(
+            `turn ${turnId} has no recorded events`,
+          ),
+        );
+      }
+
+      const derived = readTurnValues(this.#events, turnId);
+      const base = {
+        type: SessionEventType.TurnFinished as const,
+        turnId,
+        output: derived.output,
+        steps: derived.steps,
+        usage: derived.usage,
+      };
+      const event: SessionTurnFinishedEvent =
+        input.status === AgentStatus.Aborted
+          ? { ...base, status: AgentStatus.Aborted }
+          : { ...base, status: input.status, messages: [...input.messages] };
+      return this.#append(event);
+    });
+  }
+
+  /**
+   * Retract the whole turn by targeting its first recorded event. Storage keeps
+   * every record; replay excludes the turn from projection.
+   */
+  retractTurn(
+    turnId: TurnId,
+    reason: string,
+  ): Promise<EventLogRecord<SessionEvent>> {
+    return this.#enqueue(async () => {
+      this.#assertWritable();
+      const index = this.#events.findIndex(
+        (item) => eventTurnId(item) === turnId,
+      );
+      if (index < 0) {
+        throw new SessionLogError(
+          ERROR_MESSAGES.eventLog.invalidRecord(
+            `turn ${turnId} has no recorded events`,
+          ),
+        );
+      }
+      return this.#append({
+        type: SessionEventType.Retraction,
+        retractsSequence: index + 1,
+        reason,
+      });
+    });
+  }
+
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#queue.then(operation);
+    this.#queue = result.then(
       () => undefined,
       () => undefined,
     );
-    return operation;
+    return result;
   }
 
   async #append(
@@ -491,11 +606,14 @@ export class SessionLog {
     this.#assertWritable();
 
     try {
-      assertJsonSafeSessionEvent(event);
-      this.#validate(event);
+      // Decode through the codec so an event that could not be read back after
+      // a restart is rejected before it reaches storage.
+      const validated = this.#codec.decode(event);
+      assertJsonSafeSessionEvent(validated);
+      this.#validate(validated);
 
-      const record = await this.#handle.append(event);
-      this.#events[record.sequence - 1] = event;
+      const record = await this.#handle.append(validated);
+      this.#events[record.sequence - 1] = validated;
       return record;
     } catch (error) {
       this.#poisoned = toError(error);
@@ -526,6 +644,17 @@ export class SessionLog {
           ERROR_MESSAGES.eventLog.invalidRecord(
             `turn ${event.turnId} has no recorded events`,
           ),
+        );
+      }
+      if (
+        this.#events.some(
+          (item) =>
+            item?.type === SessionEventType.TurnFinished &&
+            item.turnId === event.turnId,
+        )
+      ) {
+        throw new SessionLogError(
+          ERROR_MESSAGES.sessionLog.turnAlreadyFinished(event.turnId),
         );
       }
       assertTurnFinishedMatches(event, this.#events);

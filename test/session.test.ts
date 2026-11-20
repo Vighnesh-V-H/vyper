@@ -5,7 +5,7 @@ import {
   persistedModelResponse,
   SessionEventCodec,
 } from "../src/session/codec";
-import { SessionLog } from "../src/session/log";
+import { SessionLog, replaySession } from "../src/session/log";
 import { AgentErrorStage, AgentStatus } from "../src/types/agent";
 import type { TokenUsage } from "../src/types/context";
 import type { EventLogRecord } from "../src/types/event-log";
@@ -133,6 +133,28 @@ describe("persisted session log", () => {
     expect(records.filter((record) => record.event.type === SessionEventType.Header)).toHaveLength(1);
   });
 
+  test("resume rejects a header with an incompatible session version", async () => {
+    const log = new MemoryEventLog<SessionEvent>();
+    const first = await SessionLog.open({
+      log,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+      version: 2,
+      now: () => 1_000,
+    });
+    await first.close();
+
+    await expect(
+      SessionLog.open({
+        log,
+        sessionId,
+        model: "ignored",
+        cwd: "/ignored",
+      }),
+    ).rejects.toThrow(/unsupported session version 2/);
+  });
+
   test("read is a bounded snapshot and does not wait for later appends", async () => {
     const log = new MemoryEventLog<number>();
     const handle = await log.open(asEventLogStreamId("stream-1"));
@@ -198,6 +220,68 @@ describe("persisted session log", () => {
       session.append({ type: SessionEventType.Reset }),
     ).rejects.toThrow(/poisoned/);
     await expect(session.flush()).rejects.toThrow(/poisoned/);
+  });
+
+  test("rejects a second TurnFinished for the same turn", async () => {
+    const session = await openSession();
+    const turnId = asTurnId("turn-once");
+    const messages: Message[] = [{ role: "assistant", content: "once" }];
+
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "once",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: response("once"),
+    });
+    await session.append(finished(turnId, "once", messages));
+
+    await expect(
+      session.append(finished(turnId, "once", messages)),
+    ).rejects.toThrow(/already has a TurnFinished/);
+  });
+
+  test("replay rejects a TurnFinished that disagrees with recorded events", async () => {
+    const log = new MemoryEventLog<SessionEvent>();
+    const handle = await log.open(asEventLogStreamId(sessionId));
+    const turnId = asTurnId("turn-1");
+    const messages: Message[] = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "actual" },
+    ];
+
+    await handle.append({
+      type: SessionEventType.Header,
+      sessionId,
+      version: 1,
+      timestamp: 1_000,
+      model: "test-model",
+      cwd: "/work",
+    });
+    await handle.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "hello",
+    });
+    await handle.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: response("actual"),
+    });
+    // Bypass SessionLog validation to simulate a tampered or corrupt store.
+    await handle.append({
+      ...finished(turnId, "actual", messages),
+      output: "tampered",
+    });
+
+    const records: EventLogRecord<SessionEvent>[] = [];
+    for await (const record of handle.read()) records.push(record);
+    expect(() => replaySession(sessionId, records)).toThrow(/output=/);
   });
 
   test("retractions exclude a turn from projection but keep its records", async () => {
