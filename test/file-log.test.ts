@@ -99,9 +99,9 @@ describe("FileEventLog", () => {
       await handle.append({ value: "two" });
       await handle.flush();
 
-      expect((await collect(early)).map((record) => record.event.value)).toEqual(
-        ["one"],
-      );
+      expect(
+        (await collect(early)).map((record) => record.event.value),
+      ).toEqual(["one"]);
       expect(
         (await collect(handle.read())).map((record) => record.event.value),
       ).toEqual(["one", "two"]);
@@ -142,9 +142,7 @@ describe("FileEventLog", () => {
         `${JSON.stringify({ ...base, sequence: 2 })}\n`,
         "utf8",
       );
-      await expect(log.open(streamId)).rejects.toThrow(
-        /expected 1/,
-      );
+      await expect(log.open(streamId)).rejects.toThrow(/expected 1/);
     });
   });
 
@@ -170,9 +168,7 @@ describe("FileEventLog", () => {
         codec,
       }).open(streamId);
       await handle.close();
-      await expect(handle.append({ value: "late" })).rejects.toThrow(
-        /closed/,
-      );
+      await expect(handle.append({ value: "late" })).rejects.toThrow(/closed/);
     });
   });
 
@@ -193,9 +189,7 @@ describe("FileEventLog", () => {
       await expect(handle.append({ value: "late" })).rejects.toThrow(/closing/);
       await rm(lockPath, { recursive: true, force: true });
       await handle.close();
-      await expect(handle.append({ value: "late" })).rejects.toThrow(
-        /closed/,
-      );
+      await expect(handle.append({ value: "late" })).rejects.toThrow(/closed/);
     });
   });
 

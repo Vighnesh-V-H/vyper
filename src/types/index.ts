@@ -7,18 +7,8 @@ export type {
   UserMessage,
 } from "./message";
 
-export {
-  asEventLogStreamId,
-  asSessionId,
-  asToolCallId,
-  asTurnId,
-} from "./ids";
-export type {
-  EventLogStreamId,
-  SessionId,
-  ToolCallId,
-  TurnId,
-} from "./ids";
+export { asEventLogStreamId, asSessionId, asToolCallId, asTurnId } from "./ids";
+export type { EventLogStreamId, SessionId, ToolCallId, TurnId } from "./ids";
 
 export { ToolExecutionErrorKind } from "./tools";
 export type {

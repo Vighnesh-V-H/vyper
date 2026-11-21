@@ -1,11 +1,4 @@
-import {
-  mkdir,
-  open,
-  readFile,
-  readdir,
-  stat,
-  unlink,
-} from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";

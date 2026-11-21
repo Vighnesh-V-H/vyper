@@ -5,18 +5,14 @@ import {
   SessionLogError,
   toError,
 } from "../errors";
-import type {
-  EventLogRecord,
-} from "../types/event-log";
+import type { EventLogRecord } from "../types/event-log";
 import { AgentStatus } from "../types/agent";
 import { asEventLogStreamId } from "../types/ids";
 import type { SessionId, TurnId } from "../types/ids";
 import type { JsonObject } from "../types/json-schema";
 import type { Message } from "../types/message";
 import type { TokenUsage } from "../types/context";
-import {
-  SessionEventType,
-} from "../types/session";
+import { SessionEventType } from "../types/session";
 import type {
   SessionEvent,
   SessionEventLog,
@@ -167,7 +163,10 @@ function readTurnValues(
 ): TurnValues {
   const values = emptyTurnValues();
   for (const event of events) {
-    if (event.type === SessionEventType.ModelResponded && event.turnId === turnId) {
+    if (
+      event.type === SessionEventType.ModelResponded &&
+      event.turnId === turnId
+    ) {
       values.responses.push(event);
     } else if (
       event.type === SessionEventType.ToolCompleted &&
@@ -202,7 +201,11 @@ function assertTurnFinishedMatches(
     mismatch("steps", String(derived.steps), String(finished.steps));
   }
   if (finished.output !== derived.output) {
-    mismatch("output", JSON.stringify(derived.output), JSON.stringify(finished.output));
+    mismatch(
+      "output",
+      JSON.stringify(derived.output),
+      JSON.stringify(finished.output),
+    );
   }
   if (
     finished.usage.inputTokens !== derived.usage.inputTokens ||
@@ -231,9 +234,7 @@ function assertTurnFinishedMatches(
   }
 }
 
-function retractedTurns(
-  records: readonly EventLogRecord<SessionEvent>[],
-): {
+function retractedTurns(records: readonly EventLogRecord<SessionEvent>[]): {
   readonly turns: ReadonlySet<TurnId>;
   readonly sequences: ReadonlySet<number>;
 } {
@@ -642,9 +643,7 @@ export class SessionLog {
     return result;
   }
 
-  async #append(
-    event: SessionEvent,
-  ): Promise<EventLogRecord<SessionEvent>> {
+  async #append(event: SessionEvent): Promise<EventLogRecord<SessionEvent>> {
     this.#assertWritable();
 
     try {

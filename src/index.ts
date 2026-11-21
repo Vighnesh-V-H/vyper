@@ -1,4 +1,3 @@
-
 import { main } from "./cli";
 import { errorMessage } from "./errors";
 
@@ -43,7 +42,11 @@ export type {
   ToolExecutionEngineOptions,
   ToolExecutionRequest,
 } from "./tools/executor";
-export { builtinTools, createToolRegistry, discoverTools } from "./tools/discovery";
+export {
+  builtinTools,
+  createToolRegistry,
+  discoverTools,
+} from "./tools/discovery";
 export type { ToolDiscoveryOptions } from "./tools/discovery";
 export {
   isJsonSchema,
