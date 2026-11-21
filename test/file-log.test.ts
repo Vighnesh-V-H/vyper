@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -98,9 +99,9 @@ describe("FileEventLog", () => {
       await handle.append({ value: "two" });
       await handle.flush();
 
-      expect((await collect(early)).map((record) => record.event.value)).toEqual(
-        ["one"],
-      );
+      expect(
+        (await collect(early)).map((record) => record.event.value),
+      ).toEqual(["one"]);
       expect(
         (await collect(handle.read())).map((record) => record.event.value),
       ).toEqual(["one", "two"]);
@@ -141,9 +142,7 @@ describe("FileEventLog", () => {
         `${JSON.stringify({ ...base, sequence: 2 })}\n`,
         "utf8",
       );
-      await expect(log.open(streamId)).rejects.toThrow(
-        /expected 1/,
-      );
+      await expect(log.open(streamId)).rejects.toThrow(/expected 1/);
     });
   });
 
@@ -169,9 +168,28 @@ describe("FileEventLog", () => {
         codec,
       }).open(streamId);
       await handle.close();
-      await expect(handle.append({ value: "late" })).rejects.toThrow(
-        /closed/,
-      );
+      await expect(handle.append({ value: "late" })).rejects.toThrow(/closed/);
+    });
+  });
+
+  test("reports and retries a failed lock release", async () => {
+    await withDirectory(async (directory) => {
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      const lockPath = join(directory, "stream-1.jsonl.lock");
+
+      // Make the unlock fail by replacing the lock file with a directory.
+      await rm(lockPath);
+      await mkdir(lockPath);
+      await expect(handle.close()).rejects.toThrow();
+
+      // The handle stays retryable, and appends remain rejected in between.
+      await expect(handle.append({ value: "late" })).rejects.toThrow(/closing/);
+      await rm(lockPath, { recursive: true, force: true });
+      await handle.close();
+      await expect(handle.append({ value: "late" })).rejects.toThrow(/closed/);
     });
   });
 
@@ -222,6 +240,67 @@ describe("FileEventLog", () => {
         (await collect(reopened.read())).map((record) => record.event.value),
       ).toEqual(["recovered"]);
       await reopened.close();
+    });
+  });
+
+  test("recovers an abandoned recovery guard and lock together", async () => {
+    await withDirectory(async (directory) => {
+      const lockPath = join(directory, "stream-1.jsonl.lock");
+      const guardPath = `${lockPath}.guard.0`;
+      await writeFile(lockPath, "", "utf8");
+      await writeFile(guardPath, "", "utf8");
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+      await utimes(guardPath, old, old);
+
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      await handle.append({ value: "recovered" });
+      await handle.flush();
+      await handle.close();
+
+      expect(
+        (await readdir(directory)).filter((name) => name.endsWith(".lock")),
+      ).toEqual([]);
+    });
+  });
+
+  test("allows only one writer when concurrent opens recover an abandoned guard and lock", async () => {
+    await withDirectory(async (directory) => {
+      const old = new Date(Date.now() - 120_000);
+      const log = new FileEventLog<Payload>({ directory, codec });
+
+      for (let iteration = 0; iteration < 10; iteration += 1) {
+        const stream = asEventLogStreamId(`stream-${iteration}`);
+        const lockPath = join(directory, `stream-${iteration}.jsonl.lock`);
+        const guardPath = `${lockPath}.guard.0`;
+        await writeFile(lockPath, "", "utf8");
+        await writeFile(guardPath, "", "utf8");
+        await utimes(lockPath, old, old);
+        await utimes(guardPath, old, old);
+
+        const results = await Promise.allSettled([
+          log.open(stream),
+          log.open(stream),
+          log.open(stream),
+        ]);
+        const opened = results.filter(
+          (result) => result.status === "fulfilled",
+        );
+        expect(opened).toHaveLength(1);
+
+        const winner = opened[0];
+        if (winner?.status !== "fulfilled") throw new Error("missing winner");
+        await winner.value.close();
+
+        for (const result of results) {
+          if (result.status === "rejected") {
+            expect(String(result.reason)).toMatch(/another writer/);
+          }
+        }
+      }
     });
   });
 
@@ -302,6 +381,44 @@ describe("FileEventLog", () => {
         (await collect(reopened.read())).map((record) => record.event.value),
       ).toEqual(["one", "two"]);
       await reopened.close();
+    });
+  });
+
+  test("rejects an incompatible final record without a newline without truncating it", async () => {
+    await withDirectory(async (directory) => {
+      const path = join(directory, "stream-1.jsonl");
+      const base = {
+        version: 1,
+        streamId: "stream-1",
+        sequence: 1,
+        timestamp: 1,
+        event: { value: "one" },
+      };
+      const cases: ReadonlyArray<{
+        readonly record: Record<string, unknown>;
+        readonly pattern: RegExp;
+      }> = [
+        {
+          record: { ...base, version: 2 },
+          pattern: /unsupported version/,
+        },
+        {
+          record: { ...base, sequence: 2 },
+          pattern: /expected 1/,
+        },
+        {
+          record: { ...base, event: { value: 42 } },
+          pattern: /payload must be an object with a string value/,
+        },
+      ];
+      const log = new FileEventLog<Payload>({ directory, codec });
+
+      for (const { record, pattern } of cases) {
+        const contents = JSON.stringify(record);
+        await writeFile(path, contents, "utf8");
+        await expect(log.open(streamId)).rejects.toThrow(pattern);
+        expect(await readFile(path, "utf8")).toBe(contents);
+      }
     });
   });
 

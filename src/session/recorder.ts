@@ -13,10 +13,7 @@ import type {
 } from "../types/agent";
 import type { TurnId } from "../types/ids";
 import { asTurnId } from "../types/ids";
-import type {
-  SessionErrorInfo,
-  SessionEvent,
-} from "../types/session";
+import type { SessionErrorInfo, SessionEvent } from "../types/session";
 import { SessionEventType } from "../types/session";
 import type { ToolExecutionResult } from "../types/tools";
 import { omitUndefined } from "../util/omit-undefined";

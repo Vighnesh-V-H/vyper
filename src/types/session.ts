@@ -187,8 +187,7 @@ export interface SessionTurnAbortedEvent extends SessionTurnFinishedBase {
 }
 
 export type SessionTurnFinishedEvent =
-  | SessionTurnCommittedEvent
-  | SessionTurnAbortedEvent;
+  SessionTurnCommittedEvent | SessionTurnAbortedEvent;
 
 /**
  * A failed or retried turn is removed from projection, not deleted from

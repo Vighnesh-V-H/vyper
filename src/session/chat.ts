@@ -75,32 +75,37 @@ export class ChatSession {
   static async open(options: ChatSessionOpenOptions): Promise<ChatSession> {
     const session = new ChatSession(options.agent, options);
     session.#session = options.session;
-    session.#recorder = new SessionRecorder({
-      log: options.session,
-      ...(options.createTurnId === undefined
-        ? {}
-        : { createTurnId: options.createTurnId }),
-    });
+    try {
+      session.#recorder = new SessionRecorder({
+        log: options.session,
+        ...(options.createTurnId === undefined
+          ? {}
+          : { createTurnId: options.createTurnId }),
+      });
 
-    const snapshot = await options.session.snapshot();
-    if (snapshot.interruptedTurnId !== undefined) {
-      await options.session.retractTurn(
-        snapshot.interruptedTurnId,
-        "interrupted turn",
-      );
-      await options.session.flush();
+      const snapshot = await options.session.snapshot();
+      if (snapshot.interruptedTurnId !== undefined) {
+        await options.session.retractTurn(
+          snapshot.interruptedTurnId,
+          "interrupted turn",
+        );
+        await options.session.flush();
+      }
+      session.#messages = snapshot.messages;
+      // A compaction can leave the conversation only in its summary. Carry that
+      // summary into the first request after resuming instead of dropping it,
+      // unless a previous request already committed it into the conversation.
+      session.#pendingSummary =
+        snapshot.summary !== undefined &&
+        snapshot.summary.length > 0 &&
+        !containsSummary(snapshot.messages, snapshot.summary)
+          ? snapshot.summary
+          : undefined;
+      return session;
+    } catch (error) {
+      await options.session.close();
+      throw error;
     }
-    session.#messages = snapshot.messages;
-    // A compaction can leave the conversation only in its summary. Carry that
-    // summary into the first request after resuming instead of dropping it,
-    // unless a previous request already committed it into the conversation.
-    session.#pendingSummary =
-      snapshot.summary !== undefined &&
-      snapshot.summary.length > 0 &&
-      !containsSummary(snapshot.messages, snapshot.summary)
-        ? snapshot.summary
-        : undefined;
-    return session;
   }
 
   /** Identifier of the backing session log, when persisted. */

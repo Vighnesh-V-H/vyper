@@ -1,7 +1,7 @@
-import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   ERROR_MESSAGES,
   ErrorCode,
@@ -160,54 +160,151 @@ async function lockIsStale(path: string): Promise<boolean> {
   );
 }
 
-async function acquireBreakLock(path: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await open(path, "wx");
-      await handle.close();
-      return true;
-    } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
-      if (attempt === 0 && (await lockIsStale(path))) {
-        try {
-          await unlink(path);
-        } catch (unlinkError) {
-          if (!isMissingFile(unlinkError)) throw unlinkError;
-        }
-        continue;
-      }
-      return false;
+interface GuardSlot {
+  readonly path: string;
+  readonly token: string;
+}
+
+/** Guard slots owned by this process, so concurrent opens see them as live. */
+const activeGuardTokens = new Set<string>();
+
+function guardPathFor(lockPath: string, slot: number): string {
+  return `${lockPath}.guard.${slot}`;
+}
+
+async function guardSlotIsLive(path: string): Promise<boolean> {
+  const snapshot = await readLockSnapshot(path);
+  if (!snapshot.exists) return false;
+  if (snapshot.owner !== undefined) {
+    if (snapshot.owner.host !== hostname()) return true;
+    if (snapshot.owner.pid === process.pid) {
+      return activeGuardTokens.has(snapshot.owner.token);
     }
+    return isProcessAlive(snapshot.owner.pid);
   }
-  return false;
+  // An empty or malformed slot is live until it has had time to be written.
+  return (
+    snapshot.mtimeMs === undefined ||
+    Date.now() - snapshot.mtimeMs <= STALE_LOCK_MS
+  );
+}
+
+async function nextGuardSlot(lockPath: string): Promise<number> {
+  const directory = dirname(lockPath);
+  const prefix = `${basename(lockPath)}.guard.`;
+  const entries = await readdir(directory);
+  let max = -1;
+  for (const name of entries) {
+    if (!name.startsWith(prefix)) continue;
+    const suffix = name.slice(prefix.length);
+    if (!/^(0|[1-9]\d*)$/.test(suffix)) continue;
+    const slot = Number(suffix);
+    if (Number.isSafeInteger(slot) && slot > max) max = slot;
+  }
+  return max + 1;
+}
+
+async function releaseGuard(guard: GuardSlot): Promise<void> {
+  activeGuardTokens.delete(guard.token);
+  try {
+    await unlink(guard.path);
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
 }
 
 /**
- * Remove an abandoned lock. A short-lived break lock serializes removal so two
- * processes cannot both delete a lock that was just recreated by the winner.
+ * Take the recovery guard. Guard slots are immutable files allocated above
+ * every existing slot, and no process ever removes another process's slot. A
+ * later contender therefore cannot replace or delete an earlier guard, and the
+ * lowest live slot is the only winner.
+ */
+async function acquireGuard(
+  lockPath: string,
+  owner: LockOwner,
+): Promise<GuardSlot | undefined> {
+  const guardOwner: LockOwner = { ...owner, token: crypto.randomUUID() };
+  let slot = -1;
+  let guardPath: string | undefined;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    slot = await nextGuardSlot(lockPath);
+    const candidate = guardPathFor(lockPath, slot);
+    let handle: FileHandle | undefined;
+    let created = false;
+    try {
+      handle = await open(candidate, "wx");
+      created = true;
+      // Publish ownership before the slot becomes visible to same-process
+      // contenders; a partial write is still treated as live until it ages out.
+      activeGuardTokens.add(guardOwner.token);
+      await handle.writeFile(JSON.stringify(guardOwner));
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      guardPath = candidate;
+      break;
+    } catch (error) {
+      if (handle !== undefined) {
+        try {
+          await handle.close();
+        } catch {
+          // The original failure is the useful one.
+        }
+      }
+      if (created) {
+        activeGuardTokens.delete(guardOwner.token);
+        try {
+          await unlink(candidate);
+        } catch {
+          // An unreadable slot is skipped once its owner is gone.
+        }
+      }
+      if (isAlreadyExists(error)) continue;
+      throw error;
+    }
+  }
+
+  if (guardPath === undefined) return undefined;
+  const guard: GuardSlot = { path: guardPath, token: guardOwner.token };
+
+  try {
+    // Slots are allocated above every existing slot, so only lower slots can
+    // preempt this guard. Later contenders are guaranteed to be above us.
+    for (let lower = 0; lower < slot; lower += 1) {
+      if (await guardSlotIsLive(guardPathFor(lockPath, lower))) {
+        try {
+          await releaseGuard(guard);
+        } catch {
+          // The slot expires with this process; losing the election is enough.
+        }
+        return undefined;
+      }
+    }
+    return guard;
+  } catch (error) {
+    try {
+      await releaseGuard(guard);
+    } catch {
+      // Preserve the original election failure.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Remove an abandoned lock. The caller must hold the recovery guard. Creation
+ * and removal share that guard, so a process can never delete a lock another
+ * process created after the stale check.
  */
 async function removeStaleLock(path: string): Promise<boolean> {
   if (!(await lockIsStale(path))) return false;
-
-  const breakPath = `${path}.break`;
-  if (!(await acquireBreakLock(breakPath))) return false;
   try {
-    // Re-check after taking the break lock; another process may have already
-    // replaced the abandoned lock with a live one.
-    if (!(await lockIsStale(path))) return false;
-    try {
-      await unlink(path);
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-    }
-    return true;
-  } finally {
-    try {
-      await unlink(breakPath);
-    } catch {
-      // A missing break file means another process already cleaned it up.
-    }
+    await unlink(path);
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
   }
+  return true;
 }
 
 async function releaseLock(path: string, token: string): Promise<void> {
@@ -221,10 +318,49 @@ async function releaseLock(path: string, token: string): Promise<void> {
   }
 }
 
+async function createLock(
+  path: string,
+  owner: LockOwner,
+): Promise<(() => Promise<void>) | undefined> {
+  let handle: FileHandle | undefined;
+  let created = false;
+  try {
+    handle = await open(path, "wx");
+    created = true;
+    await handle.writeFile(JSON.stringify(owner));
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    return async () => releaseLock(path, owner.token);
+  } catch (error) {
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch {
+        // The original failure is the useful one.
+      }
+    }
+    if (created) {
+      try {
+        await unlink(path);
+      } catch {
+        // The lock may already have been removed by a stale-lock recovery.
+      }
+    }
+    if (isAlreadyExists(error)) return undefined;
+    throw error;
+  }
+}
+
 /**
  * Take exclusive ownership of a stream before reading it. The lock is a sibling
  * file created with O_EXCL, so a second writer cannot assign sequence numbers
  * from the same snapshot.
+ *
+ * Creation is attempted directly. Stale recovery takes a recovery guard that
+ * serializes all recoverers. The guard uses immutable slots: each contender
+ * allocates a new slot and the lowest live slot wins, so recovering a guard
+ * never deletes a guard another process just created.
  */
 async function acquireLock(
   path: string,
@@ -236,44 +372,33 @@ async function acquireLock(
     token: crypto.randomUUID(),
     createdAt: Date.now(),
   };
+  const locked = (): EventLogError =>
+    new EventLogError(ERROR_MESSAGES.eventLog.streamLocked(String(streamId)));
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let handle: FileHandle | undefined;
-    let created = false;
+  const created = await createLock(path, owner);
+  if (created !== undefined) return created;
+  if (!(await lockIsStale(path))) throw locked();
+
+  const guard = await acquireGuard(path, owner);
+  if (guard === undefined) throw locked();
+  try {
+    // Re-check after winning the guard. Another process may have recovered the
+    // lock between the initial check and guard acquisition.
+    if (!(await removeStaleLock(path))) throw locked();
+
+    // If a direct creator wins the race after the stale lock is removed, its
+    // live lock must be left alone. Do not retry removal here.
+    const recovered = await createLock(path, owner);
+    if (recovered === undefined) throw locked();
+    return recovered;
+  } finally {
     try {
-      handle = await open(path, "wx");
-      created = true;
-      await handle.writeFile(JSON.stringify(owner));
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      return async () => releaseLock(path, owner.token);
-    } catch (error) {
-      if (handle !== undefined) {
-        try {
-          await handle.close();
-        } catch {
-          // The original failure is the useful one.
-        }
-      }
-      if (created) {
-        try {
-          await unlink(path);
-        } catch {
-          // The lock may already have been removed by a stale-lock recovery.
-        }
-      }
-      if (!isAlreadyExists(error)) throw error;
-      if (attempt < 2 && (await removeStaleLock(path))) continue;
-      throw new EventLogError(
-        ERROR_MESSAGES.eventLog.streamLocked(String(streamId)),
-      );
+      await releaseGuard(guard);
+    } catch {
+      // A leftover slot is skipped after this process exits. Never mask a
+      // successful acquisition or leak the main lock because cleanup failed.
     }
   }
-
-  throw new EventLogError(
-    ERROR_MESSAGES.eventLog.streamLocked(String(streamId)),
-  );
 }
 
 /**
@@ -399,24 +524,24 @@ function parseRecords<TEvent>(
   }
 
   // A fully written record can lose only its trailing newline. Keep it when it
-  // validates; otherwise discard the unterminated tail as an interrupted write.
+  // validates. A JSON syntax error means the tail is an interrupted write and
+  // may be discarded, but a complete JSON value that fails envelope or payload
+  // validation is incompatible history and must be reported, not truncated.
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(line);
-    const record = readEnvelope(
-      parsed,
-      streamId,
-      version,
-      codec,
-      records.length + 1,
-    );
-    if (record.sequence !== records.length + 1) {
-      return { records, validBytes: completeBytes, needsNewline: false };
-    }
-    records.push(record);
-    return { records, validBytes: data.length, needsNewline: true };
+    parsed = JSON.parse(line);
   } catch {
     return { records, validBytes: completeBytes, needsNewline: false };
   }
+  const lineNumber = records.length + 1;
+  const record = readEnvelope(parsed, streamId, version, codec, lineNumber);
+  if (record.sequence !== lineNumber) {
+    invalid(
+      `line ${lineNumber} has sequence ${record.sequence}; expected ${lineNumber}`,
+    );
+  }
+  records.push(record);
+  return { records, validBytes: data.length, needsNewline: true };
 }
 
 async function writeAll(file: FileHandle, buffer: Buffer): Promise<void> {
@@ -548,7 +673,9 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
   #nextSequence: number;
   #queue: Promise<void> = Promise.resolve();
   #poisoned: Error | undefined;
+  #closePromise: Promise<void> | undefined;
   #closing = false;
+  #fileClosed = false;
   #closed = false;
 
   constructor(
@@ -617,28 +744,40 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
 
   async close(): Promise<void> {
     if (this.#closed) return;
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    const operation = this.#close();
+    this.#closePromise = operation;
+    try {
+      await operation;
+    } finally {
+      this.#closePromise = undefined;
+    }
+  }
+
+  async #close(): Promise<void> {
     this.#closing = true;
     try {
       await this.#queue;
     } catch {
       // Writes already report and poison the handle; close still releases it.
     }
+    if (!this.#fileClosed) {
+      try {
+        if (this.#poisoned === undefined) await this.#file.sync();
+      } catch {
+        // Closing must remain safe after write or sync failures.
+      }
+      try {
+        await this.#file.close();
+      } catch {
+        // Already closed or otherwise unusable; nothing else to release.
+      }
+      this.#fileClosed = true;
+    }
+    // Surface unlock failures and leave #closed unset so a later close() can
+    // retry. Otherwise the lock would stay live for as long as this process.
+    await this.#releaseLock();
     this.#closed = true;
-    try {
-      if (this.#poisoned === undefined) await this.#file.sync();
-    } catch {
-      // Closing must remain safe after write or sync failures.
-    }
-    try {
-      await this.#file.close();
-    } catch {
-      // Already closed or otherwise unusable; nothing else to release.
-    }
-    try {
-      await this.#releaseLock();
-    } catch {
-      // A failed unlock leaves a stale lock that the next open can recover.
-    }
   }
 
   async #write(record: EventLogRecord<TEvent>): Promise<void> {

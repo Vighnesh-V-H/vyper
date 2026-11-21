@@ -53,8 +53,7 @@ export async function main(): Promise<void> {
     onEvent: printEvent,
   });
 
-  const sessionId =
-    process.env.VYPER_SESSION_ID?.trim() || DEFAULT_SESSION_ID;
+  const sessionId = process.env.VYPER_SESSION_ID?.trim() || DEFAULT_SESSION_ID;
   const sessionDirectory = resolve(
     process.cwd(),
     process.env.VYPER_SESSION_DIR?.trim() || DEFAULT_SESSION_DIRECTORY,
