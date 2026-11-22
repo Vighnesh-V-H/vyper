@@ -125,8 +125,6 @@ export type {
 export { SessionEventType } from "./session";
 export type {
   ChatAgent,
-  ChatSessionOpenOptions,
-  ChatSessionOptions,
   CompactionEntry,
   MetadataChanged,
   PersistedModelResponse,

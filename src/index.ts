@@ -13,6 +13,8 @@ export type {
 } from "./agent/events";
 export { validateModelResponse } from "./agent/model-response";
 
+export { FileEventLog } from "./event-log/file";
+export type { FileEventLogOptions } from "./event-log/file";
 export { MemoryEventLog } from "./event-log/memory";
 export type { MemoryEventLogOptions } from "./event-log/memory";
 
@@ -23,8 +25,15 @@ export {
   readJsonValue,
   SessionEventCodec,
 } from "./session/codec";
+export { ChatSession } from "./session/chat";
+export type {
+  ChatSessionOpenOptions,
+  ChatSessionOptions,
+} from "./session/chat";
 export { replaySession, SessionLog } from "./session/log";
-export type { SessionLogOpenOptions } from "./session/log";
+export type { FinishTurnInput, SessionLogOpenOptions } from "./session/log";
+export { SessionRecorder } from "./session/recorder";
+export type { SessionRecorderOptions } from "./session/recorder";
 
 export { ToolRegistry } from "./tools/registry";
 export { ToolExecutionEngine, executeTool } from "./tools/executor";

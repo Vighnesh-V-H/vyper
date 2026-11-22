@@ -212,6 +212,8 @@ export const ERROR_MESSAGES = {
     poisoned: (detail: string): string =>
       `Event log handle is poisoned: ${detail}`,
     readAfterFailure: "Cannot read an event log after a write failure",
+    streamLocked: (streamId: string): string =>
+      `Event log stream "${streamId}" is already open by another writer`,
   },
 
   sessionLog: {
@@ -234,6 +236,23 @@ export const ERROR_MESSAGES = {
       `Sequence ${sequence} was already retracted`,
     compactionCutoffInvalid: (cutoff: number, sequence: number): string =>
       `Compaction cutoff ${cutoff} must be below its own sequence ${sequence}`,
+    turnAlreadyFinished: (turnId: string): string =>
+      `Turn ${turnId} already has a TurnFinished record`,
+  },
+
+  sessionRecorder: {
+    turnAlreadyActive: "A session turn is already being recorded",
+    noActiveTurn: "No session turn is being recorded",
+    recordingFailed: (detail: string): string =>
+      `Session event recording failed: ${detail}`,
+  },
+
+  chat: {
+    turnInProgress: "A chat turn is already in progress",
+    resetWhileRunning: "Cannot reset a chat session while a turn is running",
+    resetInProgress: "A chat session reset is already in progress",
+    closeWhileRunning: "Cannot close a chat session while a turn is running",
+    closeWhileResetting: "Cannot close a chat session while it is resetting",
   },
 
   // Provider adapters

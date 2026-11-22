@@ -180,7 +180,7 @@ describe("ChatSession", () => {
     await session.ask("second");
     expect(session.messages).toHaveLength(2);
 
-    session.reset();
+    await session.reset();
     expect(session.messages).toEqual([]);
   });
 });

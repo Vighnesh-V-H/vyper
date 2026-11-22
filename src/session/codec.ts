@@ -453,7 +453,7 @@ function readWarning(value: Record<string, unknown>): SessionWarningEvent {
   return {
     type: SessionEventType.Warning,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
-    step: expectPositiveInteger(value.step, "event.step"),
+    step: expectNonNegativeInteger(value.step, "event.step"),
     stage: readEnum(
       value.stage,
       [
@@ -473,7 +473,7 @@ function readError(value: Record<string, unknown>): SessionErrorEvent {
   return {
     type: SessionEventType.Error,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
-    step: expectPositiveInteger(value.step, "event.step"),
+    step: expectNonNegativeInteger(value.step, "event.step"),
     stage: readEnum(
       value.stage,
       [
