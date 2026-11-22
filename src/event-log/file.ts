@@ -8,7 +8,7 @@ import {
 import type { FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   ERROR_MESSAGES,
   ErrorCode,
@@ -665,8 +665,9 @@ async function writeAll(file: FileHandle, buffer: Buffer): Promise<void> {
  *
  * Every append is serialized through a queue so sequence order and file order
  * agree. `flush()` is the durability barrier: it waits for queued writes and
- * syncs the file. `read()` returns an in-memory snapshot of accepted records,
- * matching the bounded-read contract of `EventLogHandle`.
+ * syncs the file. `read()` returns an in-memory snapshot of the durable prefix:
+ * records covered by a successful `flush()` (or loaded from disk at open).
+ * Appended records become readable after the next `flush()`.
  */
 export class FileEventLog<TEvent> implements EventLog<TEvent> {
   readonly #directory: string;
@@ -716,10 +717,24 @@ export class FileEventLog<TEvent> implements EventLog<TEvent> {
       mode: PRIVATE_DIR_MODE,
     });
     if (madeDirectory !== undefined) {
-      // Best effort for nested creations: persist the new top-level entry and
-      // the log directory's own entries.
-      await syncDirectory(dirname(madeDirectory));
-      await syncDirectory(this.#directory);
+      // recursive mkdir returns the FIRST directory it created. Every directory
+      // from there down to the log directory is new, and each one's entry lives
+      // in its parent, so sync the whole chain plus the first one's parent.
+      // Syncing only the endpoints would leave intermediate entries (for
+      // example `.vyper` inside the repo, or `sessions` inside `.vyper`)
+      // volatile.
+      const first = resolve(madeDirectory);
+      let current = resolve(this.#directory);
+      const chain: string[] = [];
+      for (;;) {
+        chain.push(current);
+        if (current === first) break;
+        const parent = dirname(current);
+        if (parent === current) break; // reached the root; first not on path
+        current = parent;
+      }
+      await syncDirectory(dirname(first));
+      for (const directory of chain.reverse()) await syncDirectory(directory);
     }
     const path = join(this.#directory, fileNameFor(streamId));
     const releaseLock = await acquireLock(
@@ -796,6 +811,8 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
   readonly #codec: EventLogCodec<TEvent>;
   readonly #releaseLock: () => Promise<void>;
   #nextSequence: number;
+  /** Length of the prefix of #records covered by a successful fsync. */
+  #durableCount: number;
   #queue: Promise<void> = Promise.resolve();
   #poisoned: Error | undefined;
   #closePromise: Promise<void> | undefined;
@@ -818,6 +835,8 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     this.#codec = codec;
     this.#releaseLock = releaseLock;
     this.#nextSequence = records.length + 1;
+    // Records parsed at open came from the file, so they are already on disk.
+    this.#durableCount = records.length;
   }
 
   get nextSequence(): number {
@@ -851,17 +870,28 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     this.#assertAccepting();
     await this.#queue;
     this.#assertAccepting();
+    // Every record counted here was fully written before this synchronous
+    // read, so the sync below covers all of them. Records appended after this
+    // point are not covered and stay hidden from read() until a later flush.
+    const covered = this.#records.length;
     try {
       await this.#file.sync();
     } catch (error) {
       this.#poison(toError(error));
       throw error;
     }
+    this.#durableCount = Math.max(this.#durableCount, covered);
   }
 
+  /**
+   * Returns only records covered by a successful sync (records loaded at open
+   * are already on disk). Appended-but-unflushed records are excluded, so a
+   * caller can never treat history as saved that a crash could still lose.
+   * Call `flush()` first to read your own latest appends.
+   */
   read(): AsyncIterable<EventLogRecord<TEvent>> {
     // Capture the snapshot at call time; later appends stay invisible.
-    const snapshot = this.#records.slice();
+    const snapshot = this.#records.slice(0, this.#durableCount);
     return (async function* (): AsyncGenerator<EventLogRecord<TEvent>> {
       for (const record of snapshot) yield record;
     })();
@@ -888,7 +918,11 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     }
     if (!this.#fileClosed) {
       try {
-        if (this.#poisoned === undefined) await this.#file.sync();
+        if (this.#poisoned === undefined) {
+          const covered = this.#records.length;
+          await this.#file.sync();
+          this.#durableCount = Math.max(this.#durableCount, covered);
+        }
       } catch {
         // Closing must remain safe after write or sync failures.
       }
