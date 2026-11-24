@@ -21,13 +21,11 @@ export const ERROR_MESSAGES = {
     modelMustProvideGenerate: "AgentOptions.model must provide generate()",
     contextMustProvideHooks:
       "AgentOptions.context must provide prepare() and observe()",
-    toolsMustProvideCatalog:
-      "AgentOptions.tools must provide get() and list()",
+    toolsMustProvideCatalog: "AgentOptions.tools must provide get() and list()",
     instructionsMustBeString: "AgentOptions.instructions must be a string",
     cwdMustBeNonEmptyString: "AgentOptions.cwd must be a non-empty string",
     onEventMustBeFunction: "AgentOptions.onEvent must be a function",
-    onEventErrorMustBeFunction:
-      "AgentOptions.onEventError must be a function",
+    onEventErrorMustBeFunction: "AgentOptions.onEventError must be a function",
     interceptorsMustBeFunctions:
       "Agent interceptors must be an array of functions",
     maxStepsMustBePositiveInteger:
@@ -64,8 +62,7 @@ export const ERROR_MESSAGES = {
       `messages[${index}].toolCallId must be a non-empty string`,
     roleInvalid: (index: number): string =>
       `messages[${index}].role is invalid`,
-    messageMissing: (index: number): string =>
-      `messages[${index}] is missing`,
+    messageMissing: (index: number): string => `messages[${index}] is missing`,
     orphanToolMessage: (index: number): string =>
       `messages[${index}] is an orphan tool message`,
     assistantMustContainContent: (index: number): string =>
@@ -143,8 +140,7 @@ export const ERROR_MESSAGES = {
     pathMustBeNonEmptyString: "path must be a non-empty string",
     offsetMustBePositiveInteger: "offset must be a positive integer",
     limitMustBePositiveInteger: "limit must be a positive integer",
-    pathOutsideWorkingDirectory:
-      "Path must stay inside the working directory",
+    pathOutsideWorkingDirectory: "Path must stay inside the working directory",
     patternMustBeString: "pattern must be a string",
     pathMustBeString: "path must be a string",
     globMustBeString: "glob must be a string",
@@ -205,10 +201,8 @@ export const ERROR_MESSAGES = {
     timeoutMustBePositiveNumber: "timeoutMs must be a positive number",
     maxResultCharsMustBePositiveInteger:
       "maxResultChars must be a positive integer",
-    concurrencyMustBePositiveInteger:
-      "concurrency must be a positive integer",
-    catalogMustProvideGetAndList:
-      "Tool catalog must provide get() and list()",
+    concurrencyMustBePositiveInteger: "concurrency must be a positive integer",
+    catalogMustProvideGetAndList: "Tool catalog must provide get() and list()",
     unknownTool: (name: string): string => `Unknown tool: ${name}`,
     invalidArguments: (name: string, detail: string): string =>
       `Invalid arguments for ${name}: ${detail}`,

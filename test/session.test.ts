@@ -130,7 +130,9 @@ describe("persisted session log", () => {
     const records: EventLogRecord<SessionEvent>[] = [];
     for await (const record of resumed.read()) records.push(record);
     expect(records[0]?.sequence).toBe(1);
-    expect(records.filter((record) => record.event.type === SessionEventType.Header)).toHaveLength(1);
+    expect(
+      records.filter((record) => record.event.type === SessionEventType.Header),
+    ).toHaveLength(1);
   });
 
   test("resume rejects a header with an incompatible session version", async () => {

@@ -3,8 +3,16 @@ import { Agent } from "../src/agent/agent";
 import { ERROR_MESSAGES } from "../src/errors";
 import { clockTool } from "../src/tools/builtin/clock";
 import { ToolRegistry } from "../src/tools/registry";
-import { AgentErrorStage, AgentEventType, AgentStatus } from "../src/types/agent";
-import type { ContextManager, PrepareContextInput, PreparedContext } from "../src/types/context";
+import {
+  AgentErrorStage,
+  AgentEventType,
+  AgentStatus,
+} from "../src/types/agent";
+import type {
+  ContextManager,
+  PrepareContextInput,
+  PreparedContext,
+} from "../src/types/context";
 import { asToolCallId } from "../src/types/ids";
 import type {
   Model,
@@ -66,7 +74,9 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: asToolCallId("call-1"), name: "clock", arguments: {} }],
+          toolCalls: [
+            { id: asToolCallId("call-1"), name: "clock", arguments: {} },
+          ],
         },
         {
           text: "final answer",
@@ -108,7 +118,9 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: asToolCallId("call-1"), name: "missing", arguments: {} }],
+          toolCalls: [
+            { id: asToolCallId("call-1"), name: "missing", arguments: {} },
+          ],
         },
         { text: "recovered", toolCalls: [] },
       ]),
@@ -119,7 +131,9 @@ describe("Agent", () => {
     });
 
     const result = await agent.run("hello");
-    const toolMessage = result.messages.find((message) => message.role === "tool");
+    const toolMessage = result.messages.find(
+      (message) => message.role === "tool",
+    );
 
     expect(result.status).toBe(AgentStatus.Completed);
     expect(result.output).toBe("recovered");
@@ -228,7 +242,9 @@ describe("Agent", () => {
     const agent = new Agent({
       model: {
         async generate(): Promise<ModelResponse> {
-          throw new Error("generate() should not be used when streamText exists");
+          throw new Error(
+            "generate() should not be used when streamText exists",
+          );
         },
         async *streamText(
           input: ModelRequest,
@@ -268,7 +284,9 @@ describe("Agent", () => {
     const agent = new Agent({
       model: {
         async generate(): Promise<ModelResponse> {
-          throw new Error("generate() should not be used when streamText exists");
+          throw new Error(
+            "generate() should not be used when streamText exists",
+          );
         },
         async *streamText(): AsyncIterable<ModelStreamChunk> {
           yield { type: ModelStreamChunkType.TextDelta, text: "streamed " };
@@ -437,7 +455,9 @@ describe("Agent", () => {
       model: sequenceModel([
         {
           text: "",
-          toolCalls: [{ id: asToolCallId("call-1"), name: "clock", arguments: {} }],
+          toolCalls: [
+            { id: asToolCallId("call-1"), name: "clock", arguments: {} },
+          ],
         },
       ]),
       instructions: "test",

@@ -16,12 +16,25 @@ import type {
   AgentResult,
   AgentRunOptions,
 } from "../types/agent";
-import type { ContextManager, PreparedContext, TokenUsage } from "../types/context";
+import type {
+  ContextManager,
+  PreparedContext,
+  TokenUsage,
+} from "../types/context";
 import type { ToolCallId } from "../types/ids";
 import type { Message, ToolCall, UserMessage } from "../types/message";
-import type { Model, ModelRequest, ModelResponse, ModelTool } from "../types/model";
+import type {
+  Model,
+  ModelRequest,
+  ModelResponse,
+  ModelTool,
+} from "../types/model";
 import { ToolExecutionErrorKind } from "../types/tools";
-import type { ToolCatalog, ToolDefinition, ToolExecutionResult } from "../types/tools";
+import type {
+  ToolCatalog,
+  ToolDefinition,
+  ToolExecutionResult,
+} from "../types/tools";
 import { ToolExecutionEngine } from "../tools/executor";
 import type { ToolExecutionEngineOptions } from "../tools/executor";
 import { createModelTools } from "../tools/model-tools";
@@ -86,7 +99,9 @@ function cloneResponseForEvent(response: ModelResponse): ModelResponse {
  * isolates event handlers from the result later written into conversation
  * history.
  */
-function cloneToolResultForEvent(result: ToolExecutionResult): ToolExecutionResult {
+function cloneToolResultForEvent(
+  result: ToolExecutionResult,
+): ToolExecutionResult {
   return { ...result };
 }
 
@@ -101,8 +116,7 @@ function syntheticToolResult(
   name: string,
   content: string,
   errorKind:
-    | ToolExecutionErrorKind.Cancelled
-    | ToolExecutionErrorKind.Execution,
+    ToolExecutionErrorKind.Cancelled | ToolExecutionErrorKind.Execution,
 ): ToolExecutionResult {
   return { callId, name, content, isError: true, errorKind, durationMs: 0 };
 }
@@ -142,7 +156,10 @@ function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
   if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
     throw new ConfigurationError(ERROR_MESSAGES.agent.onEventMustBeFunction);
   }
-  if (options.onEventError !== undefined && typeof options.onEventError !== "function") {
+  if (
+    options.onEventError !== undefined &&
+    typeof options.onEventError !== "function"
+  ) {
     throw new ConfigurationError(
       ERROR_MESSAGES.agent.onEventErrorMustBeFunction,
     );
@@ -150,7 +167,9 @@ function normalizeAgentOptions(options: AgentOptions): NormalizedAgentOptions {
   if (
     options.interceptors !== undefined &&
     (!Array.isArray(options.interceptors) ||
-      options.interceptors.some((interceptor) => typeof interceptor !== "function"))
+      options.interceptors.some(
+        (interceptor) => typeof interceptor !== "function",
+      ))
   ) {
     throw new ConfigurationError(
       ERROR_MESSAGES.agent.interceptorsMustBeFunctions,
@@ -323,7 +342,10 @@ export class Agent {
    * 4. execute tool calls and append their results,
    * 5. repeat until the model answers, a limit is reached, or the run aborts.
    */
-  async run(input: string | readonly Message[], options: AgentRunOptions = {}): Promise<AgentResult> {
+  async run(
+    input: string | readonly Message[],
+    options: AgentRunOptions = {},
+  ): Promise<AgentResult> {
     if (typeof input !== "string" && !Array.isArray(input)) {
       throw new ConfigurationError(
         ERROR_MESSAGES.agent.inputMustBeStringOrMessages,
@@ -332,7 +354,10 @@ export class Agent {
     if (!options || typeof options !== "object") {
       throw new ConfigurationError(ERROR_MESSAGES.agent.runOptionsMustBeObject);
     }
-    if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
+    if (
+      options.onEvent !== undefined &&
+      typeof options.onEvent !== "function"
+    ) {
       throw new ConfigurationError(
         ERROR_MESSAGES.agent.runOnEventMustBeFunction,
       );
@@ -411,8 +436,7 @@ export class Agent {
       calls: readonly ToolCall[],
       content: string,
       errorKind:
-        | ToolExecutionErrorKind.Cancelled
-        | ToolExecutionErrorKind.Execution,
+        ToolExecutionErrorKind.Cancelled | ToolExecutionErrorKind.Execution,
     ): Promise<void> => {
       for (const call of calls) {
         const result = syntheticToolResult(
@@ -550,7 +574,11 @@ export class Agent {
 
       if (signal.aborted) return aborted();
 
-      const requestMessages = buildRequestMessages(history, stepContext.system, finalStep);
+      const requestMessages = buildRequestMessages(
+        history,
+        stepContext.system,
+        finalStep,
+      );
 
       steps = step;
       const request: ModelRequest = {
@@ -693,7 +721,11 @@ export class Agent {
             cwd: this.cwd,
             signal,
             deferContext: (message) => {
-              if (!message || message.role !== "user" || typeof message.content !== "string") {
+              if (
+                !message ||
+                message.role !== "user" ||
+                typeof message.content !== "string"
+              ) {
                 throw new AgentError(
                   ERROR_MESSAGES.agent.deferContextRequiresUserMessage,
                 );
@@ -760,16 +792,19 @@ export class Agent {
             result: cloneToolResultForEvent(result),
           });
         }
-        history.push({ role: "tool", toolCallId: call.id, content: result.content });
+        history.push({
+          role: "tool",
+          toolCallId: call.id,
+          content: result.content,
+        });
       }
-      for (const message of deferred) appendUserMessage(history, message.content);
+      for (const message of deferred)
+        appendUserMessage(history, message.content);
 
       if (signal.aborted) return aborted();
       if (concluded) return completed(text);
     }
 
-    return maxStepsReached(
-      ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps),
-    );
+    return maxStepsReached(ERROR_MESSAGES.agent.maxStepsReached(this.maxSteps));
   }
 }

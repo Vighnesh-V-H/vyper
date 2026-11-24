@@ -41,10 +41,7 @@ function invalid(label: string, expected: string): never {
   );
 }
 
-function expectRecord(
-  value: unknown,
-  label: string,
-): Record<string, unknown> {
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     invalid(label, "must be an object");
   }
@@ -162,7 +159,8 @@ export function readJsonValue(
     seen.add(value);
     const result: JsonValue[] = [];
     for (let index = 0; index < value.length; index += 1) {
-      if (!(index in value)) invalid(`${label}[${index}]`, "must not be a hole");
+      if (!(index in value))
+        invalid(`${label}[${index}]`, "must not be a hole");
       result.push(readJsonValue(value[index], `${label}[${index}]`, seen));
     }
     seen.delete(value);
@@ -185,10 +183,7 @@ export function readJsonValue(
   invalid(label, "must be JSON-safe");
 }
 
-export function readJsonObject(
-  value: unknown,
-  label = "value",
-): JsonObject {
+export function readJsonObject(value: unknown, label = "value"): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     invalid(label, "must be a JSON object");
   }
@@ -318,10 +313,7 @@ function readMessages(value: unknown, label: string): Message[] {
   );
 }
 
-function readToolResult(
-  value: unknown,
-  label: string,
-): ToolExecutionResult {
+function readToolResult(value: unknown, label: string): ToolExecutionResult {
   const record = expectRecord(value, label);
   const errorKindValue = record.errorKind;
   const errorKind =
@@ -361,10 +353,7 @@ function readHeader(value: unknown): SessionHeaderEvent {
       expectNonEmptyString(record.sessionId, "header.sessionId"),
     ),
     version: expectPositiveInteger(record.version, "header.version"),
-    timestamp: expectNonNegativeInteger(
-      record.timestamp,
-      "header.timestamp",
-    ),
+    timestamp: expectNonNegativeInteger(record.timestamp, "header.timestamp"),
     model: expectNonEmptyString(record.model, "header.model"),
     instructions: readOptionalString(record, "instructions", "header"),
     cwd: expectNonEmptyString(record.cwd, "header.cwd"),
@@ -372,9 +361,7 @@ function readHeader(value: unknown): SessionHeaderEvent {
   });
 }
 
-function readMetadataChanged(
-  value: unknown,
-): SessionMetadataChangedEvent {
+function readMetadataChanged(value: unknown): SessionMetadataChangedEvent {
   const record = expectRecord(value, "metadata");
   const event: SessionMetadataChangedEvent = omitUndefined({
     type: SessionEventType.MetadataChanged,
@@ -400,7 +387,9 @@ function readMetadataChanged(
   return event;
 }
 
-function readTurnStarted(value: Record<string, unknown>): SessionTurnStartedEvent {
+function readTurnStarted(
+  value: Record<string, unknown>,
+): SessionTurnStartedEvent {
   return {
     type: SessionEventType.TurnStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
@@ -408,7 +397,9 @@ function readTurnStarted(value: Record<string, unknown>): SessionTurnStartedEven
   };
 }
 
-function readStepStarted(value: Record<string, unknown>): SessionStepStartedEvent {
+function readStepStarted(
+  value: Record<string, unknown>,
+): SessionStepStartedEvent {
   return {
     type: SessionEventType.StepStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
@@ -450,9 +441,7 @@ function readToolStarted(
     type: SessionEventType.ToolStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
     step: expectPositiveInteger(value.step, "event.step"),
-    callId: asToolCallId(
-      expectNonEmptyString(value.callId, "event.callId"),
-    ),
+    callId: asToolCallId(expectNonEmptyString(value.callId, "event.callId")),
     name: expectNonEmptyString(value.name, "event.name"),
   };
 }
@@ -647,8 +636,7 @@ export function persistedModelResponse(
   return omitUndefined({
     text: response.text,
     toolCalls,
-    usage:
-      response.usage === undefined ? undefined : { ...response.usage },
+    usage: response.usage === undefined ? undefined : { ...response.usage },
   });
 }
 

@@ -107,9 +107,7 @@ function readStreamChunk(value: unknown): ModelStreamChunk {
       return { type: ModelStreamChunkType.Done };
 
     default:
-      return invalid(
-        ERROR_MESSAGES.modelResponse.streamChunkTypeInvalid(type),
-      );
+      return invalid(ERROR_MESSAGES.modelResponse.streamChunkTypeInvalid(type));
   }
 }
 

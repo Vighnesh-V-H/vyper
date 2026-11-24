@@ -7,7 +7,11 @@ import { MemoryEventLog } from "../src/event-log/memory";
 import { SessionEventCodec } from "../src/session/codec";
 import { ChatSession } from "../src/session/chat";
 import { SessionLog } from "../src/session/log";
-import { AgentErrorStage, AgentEventType, AgentStatus } from "../src/types/agent";
+import {
+  AgentErrorStage,
+  AgentEventType,
+  AgentStatus,
+} from "../src/types/agent";
 import type {
   AgentEvent,
   AgentResult,
@@ -15,11 +19,7 @@ import type {
 } from "../src/types/agent";
 import type { TokenUsage } from "../src/types/context";
 import type { EventLogRecord } from "../src/types/event-log";
-import {
-  asSessionId,
-  asToolCallId,
-  asTurnId,
-} from "../src/types/ids";
+import { asSessionId, asToolCallId, asTurnId } from "../src/types/ids";
 import type { Message, ToolCall } from "../src/types/message";
 import type { ChatAgent } from "../src/types/session";
 import type { SessionEvent } from "../src/types/session";
@@ -56,10 +56,7 @@ function completed(
   };
 }
 
-function failed(
-  messages: readonly Message[],
-  output: string,
-): AgentResult {
+function failed(messages: readonly Message[], output: string): AgentResult {
   return {
     status: AgentStatus.Error,
     stage: AgentErrorStage.Model,
@@ -71,10 +68,7 @@ function failed(
   };
 }
 
-function aborted(
-  messages: readonly Message[],
-  output: string,
-): AgentResult {
+function aborted(messages: readonly Message[], output: string): AgentResult {
   return {
     status: AgentStatus.Aborted,
     messages,
@@ -506,8 +500,7 @@ describe("persisted ChatSession", () => {
   test("persists and resumes through the file-backed event log", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vyper-chat-"));
     const codec = new SessionEventCodec();
-    const openLog = () =>
-      new FileEventLog<SessionEvent>({ directory, codec });
+    const openLog = () => new FileEventLog<SessionEvent>({ directory, codec });
 
     try {
       const firstMessages = turnMessages("first", "one");
