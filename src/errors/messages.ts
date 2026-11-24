@@ -117,6 +117,10 @@ export const ERROR_MESSAGES = {
       "Model stream tool call delta fields must be strings when present",
     streamToolCallDoneInvalid:
       "Model stream tool call done chunk must contain a valid tool call",
+    streamToolCallNameMissing: (id: string): string =>
+      `Model stream tool call ${id} is missing a name`,
+    streamToolCallDuplicate: (id: string): string =>
+      `Model stream contains duplicate completed tool call ${id}`,
     streamUsageInvalid:
       "Model stream usage chunk must contain non-negative inputTokens and outputTokens",
     streamToolCallArgumentsInvalid: (id: string, detail: string): string =>

@@ -147,6 +147,13 @@ class StreamAccumulator {
       }
 
       case ModelStreamChunkType.ToolCallDone:
+        if (this.#toolCalls.has(chunk.toolCall.id)) {
+          throw new InvalidModelResponseError(
+            ERROR_MESSAGES.modelResponse.streamToolCallDuplicate(
+              chunk.toolCall.id,
+            ),
+          );
+        }
         this.#pending.delete(chunk.toolCall.id);
         this.#toolCalls.set(chunk.toolCall.id, chunk.toolCall);
         break;
@@ -165,7 +172,12 @@ class StreamAccumulator {
     // Only a finished stream can resolve a call that never sent ToolCallDone.
     if (!partial) {
       for (const [id, pending] of this.#pending) {
-        if (this.#toolCalls.has(id) || pending.name === undefined) continue;
+        if (this.#toolCalls.has(id)) continue;
+        if (pending.name === undefined) {
+          throw new InvalidModelResponseError(
+            ERROR_MESSAGES.modelResponse.streamToolCallNameMissing(id),
+          );
+        }
         const serialized = pending.arguments.join("");
         let parsed: unknown = {};
         if (serialized.trim().length > 0) {

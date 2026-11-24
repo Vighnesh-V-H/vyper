@@ -342,6 +342,58 @@ describe("Agent", () => {
     ]);
   });
 
+  test("rejects a completed stream with an unnamed pending tool call", async () => {
+    const callId = asToolCallId("call-missing-name");
+    const agent = new Agent({
+      model: sequenceStreamModel([
+        async function* (): AsyncIterable<ModelStreamChunk> {
+          yield {
+            type: ModelStreamChunkType.ToolCallDelta,
+            toolCallId: callId,
+            argumentsDelta: "{}",
+          };
+          yield { type: ModelStreamChunkType.Done };
+        },
+      ]),
+      instructions: "test",
+      tools,
+      context,
+      cwd,
+    });
+
+    const result = await agent.run("hello");
+
+    expect(result.status).toBe(AgentStatus.Error);
+    if (result.status === AgentStatus.Error) {
+      expect(result.error.message).toContain("is missing a name");
+    }
+  });
+
+  test("rejects duplicate completed stream tool calls", async () => {
+    const callId = asToolCallId("call-duplicate");
+    const toolCall = { id: callId, name: "clock", arguments: {} };
+    const agent = new Agent({
+      model: sequenceStreamModel([
+        async function* (): AsyncIterable<ModelStreamChunk> {
+          yield { type: ModelStreamChunkType.ToolCallDone, toolCall };
+          yield { type: ModelStreamChunkType.ToolCallDone, toolCall };
+          yield { type: ModelStreamChunkType.Done };
+        },
+      ]),
+      instructions: "test",
+      tools,
+      context,
+      cwd,
+    });
+
+    const result = await agent.run("hello");
+
+    expect(result.status).toBe(AgentStatus.Error);
+    if (result.status === AgentStatus.Error) {
+      expect(result.error.message).toContain("duplicate completed tool call");
+    }
+  });
+
   test("keeps completed and cancelled tool results when aborting mid-batch", async () => {
     const controller = new AbortController();
     const firstCall = asToolCallId("call-first");
