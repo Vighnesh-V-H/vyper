@@ -17,7 +17,6 @@ import type {
   SessionContextPreparedEvent,
   SessionToolCompletedEvent,
   SessionToolStartedEvent,
-  SessionTurnAbortedEvent,
   SessionTurnCommittedEvent,
   SessionTurnFinishedEvent,
   SessionTurnStartedEvent,
@@ -104,6 +103,16 @@ function readOptionalString(
   const value = record[key];
   if (value === undefined) return undefined;
   return expectString(value, `${label}.${key}`);
+}
+
+function readOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): boolean | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  return expectBoolean(value, `${label}.${key}`);
 }
 
 function readOptionalJsonObject(
@@ -300,6 +309,15 @@ function readMessage(value: unknown, label: string): Message {
   }
 }
 
+function readMessages(value: unknown, label: string): Message[] {
+  if (!Array.isArray(value)) {
+    invalid(label, "must be an array");
+  }
+  return value.map((message, index) =>
+    readMessage(message, `${label}[${index}]`),
+  );
+}
+
 function readToolResult(
   value: unknown,
   label: string,
@@ -416,12 +434,13 @@ function readContextPrepared(
 function readModelResponded(
   value: Record<string, unknown>,
 ): SessionModelRespondedEvent {
-  return {
+  return omitUndefined({
     type: SessionEventType.ModelResponded,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
     step: expectPositiveInteger(value.step, "event.step"),
     response: readPersistedModelResponse(value.response, "event.response"),
-  };
+    partial: readOptionalBoolean(value, "partial", "event"),
+  });
 }
 
 function readToolStarted(
@@ -505,23 +524,22 @@ function readTurnFinished(
     "event.status",
   );
   if (status === AgentStatus.Aborted) {
-    const event: SessionTurnAbortedEvent = {
+    // Legacy records predate partial snapshots, so an absent messages field
+    // means "keep the previously committed conversation".
+    const messages =
+      value.messages === undefined
+        ? undefined
+        : readMessages(value.messages, "event.messages");
+    return omitUndefined({
       ...base,
       status: AgentStatus.Aborted,
-    };
-    return event;
+      messages,
+    });
   }
-  const messagesValue = value.messages;
-  if (!Array.isArray(messagesValue)) {
-    invalid("event.messages", "must be an array");
-  }
-  const messages = messagesValue.map((message, index) =>
-    readMessage(message, `event.messages[${index}]`),
-  );
   const event: SessionTurnCommittedEvent = {
     ...base,
     status,
-    messages,
+    messages: readMessages(value.messages, "event.messages"),
   };
   return event;
 }

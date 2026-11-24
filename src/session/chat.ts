@@ -48,9 +48,10 @@ function containsSummary(
  * the next one. This session feeds that result back in as the starting point
  * for the following turn.
  *
- * Completed and max-steps turns are committed. Aborted turns keep the previous
- * committed conversation. Failed turns are retracted from projection while
- * their records remain in storage.
+ * Completed and max-steps turns are committed. Aborted turns commit the
+ * partial conversation they reached, so a cancelled turn keeps its prompt and
+ * any assistant text or tool results recorded before cancellation. Failed
+ * turns are retracted from projection while their records remain in storage.
  *
  * A session created with `open()` also records the full turn lifecycle through
  * a `SessionRecorder`, and resumes the last committed conversation from the
@@ -83,6 +84,9 @@ export class ChatSession {
     });
 
     const snapshot = await options.session.snapshot();
+    // A TurnFinished (including an aborted one) commits its snapshot. Only a
+    // process crash leaves an open turn with no committed history; retract it
+    // so a later replay never treats dangling events as conversation state.
     if (snapshot.interruptedTurnId !== undefined) {
       await options.session.retractTurn(
         snapshot.interruptedTurnId,
@@ -191,10 +195,9 @@ export class ChatSession {
       // Record before committing in-memory history: if durability fails, the
       // session must not advance past what is actually stored.
       if (this.#recorder !== undefined) await this.#recorder.finish(result);
-      if (
-        result.status === AgentStatus.Completed ||
-        result.status === AgentStatus.MaxSteps
-      ) {
+      if (result.status !== AgentStatus.Error) {
+        // An aborted turn advances to the partial conversation it reached so
+        // the next request (and the next process) can continue from it.
         this.#messages = result.messages;
         // The summary is now part of the committed conversation, so later
         // turns must not inject it again.

@@ -106,6 +106,21 @@ export const ERROR_MESSAGES = {
       "Model response must contain text or tool calls",
     usageMustBeNonNegative:
       "Model response usage must contain non-negative inputTokens and outputTokens",
+    streamChunkMustBeObject: "Model stream chunk must be an object",
+    streamChunkTypeInvalid: (type: string): string =>
+      `Model stream chunk type is unknown: ${type}`,
+    streamTextDeltaMustBeString:
+      "Model stream text delta must contain a string text field",
+    streamToolCallIdMustBeNonEmptyString:
+      "Model stream tool call delta must contain a non-empty toolCallId",
+    streamToolCallDeltaMustBeString:
+      "Model stream tool call delta fields must be strings when present",
+    streamToolCallDoneInvalid:
+      "Model stream tool call done chunk must contain a valid tool call",
+    streamUsageInvalid:
+      "Model stream usage chunk must contain non-negative inputTokens and outputTokens",
+    streamToolCallArgumentsInvalid: (id: string, detail: string): string =>
+      `Model stream tool call ${id} has invalid JSON arguments: ${detail}`,
   },
 
   context: {

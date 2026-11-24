@@ -130,6 +130,11 @@ export interface SessionModelRespondedEvent {
   readonly turnId: TurnId;
   readonly step: number;
   readonly response: PersistedModelResponse;
+  /**
+   * True when the response was captured from a cancelled run and may be
+   * incomplete. Final responses omit this field.
+   */
+  readonly partial?: boolean;
 }
 
 export interface SessionToolStartedEvent {
@@ -181,9 +186,18 @@ export interface SessionTurnCommittedEvent extends SessionTurnFinishedBase {
   readonly messages: readonly Message[];
 }
 
-/** Aborted turns keep the previously committed conversation. */
+/**
+ * Aborted turns commit the partial conversation reached before cancellation:
+ * the user prompt plus any assistant text, tool calls, and tool results already
+ * recorded. A crash can leave a turn with no TurnFinished at all; replay then
+ * reports it as interrupted instead.
+ *
+ * `messages` is optional for records written before partial snapshots were
+ * supported; those legacy records keep the previously committed conversation.
+ */
 export interface SessionTurnAbortedEvent extends SessionTurnFinishedBase {
   readonly status: AgentStatus.Aborted;
+  readonly messages?: readonly Message[];
 }
 
 export type SessionTurnFinishedEvent =
@@ -268,7 +282,11 @@ export interface SessionSnapshot {
   readonly summary?: string;
   /** Sequence replaced by the latest compaction entry. */
   readonly cutoffSequence?: number;
-  /** Last committed conversation. Interrupted/retracted turns are excluded. */
+  /**
+   * Last committed conversation, including the partial progress of aborted
+   * turns. Turns interrupted by a crash (no TurnFinished) and retracted turns
+   * are excluded.
+   */
   readonly messages: readonly Message[];
   /** Set when the log ends between TurnStarted and TurnFinished. */
   readonly interruptedTurnId?: TurnId;

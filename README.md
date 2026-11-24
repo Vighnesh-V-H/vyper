@@ -26,9 +26,12 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 ## Session persistence
 
 Sessions are stored as append-only JSONL under `.vyper/sessions/`. Each turn is
-recorded as it runs and flushed before the committed conversation advances, so
-restarting the CLI resumes the last completed turn. Interrupted and failed turns
-are retracted rather than folded into history.
+recorded as it runs and flushed before the committed conversation advances.
+Completed, max-steps, and aborted turns commit the conversation they reached, so
+cancelling a turn keeps its prompt, any streamed assistant text, and tool
+results recorded before cancellation. Turns interrupted by a process crash (no
+`TurnFinished` record) and failed turns are retracted rather than folded into
+history.
 
 - `VYPER_SESSION_ID` selects a session (default: `default`).
 - `VYPER_SESSION_DIR` overrides the storage directory.

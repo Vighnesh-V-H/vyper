@@ -72,6 +72,11 @@ export interface AgentModelResponseEvent {
   type: AgentEventType.ModelResponse;
   step: number;
   response: ModelResponse;
+  /**
+   * True when a cancelled run captured the response as it stood at that
+   * moment. The text and tool calls may be incomplete.
+   */
+  partial?: boolean;
 }
 
 export interface AgentToolStartEvent {

@@ -331,14 +331,54 @@ describe("persisted ChatSession", () => {
     expect(chat.messages).toEqual(thirdMessages);
   });
 
-  test("records an aborted turn without committing its history", async () => {
+  test("commits and resumes the partial history of an aborted turn", async () => {
+    const toolCallId = asToolCallId("call-aborted");
+    const partialMessages: Message[] = [
+      { role: "user", content: "slow" },
+      {
+        role: "assistant",
+        content: "partial",
+        toolCalls: [
+          { id: toolCallId, name: "clock", arguments: { zone: "UTC" } },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId,
+        content: "12:00",
+      },
+    ];
     const agent = scriptedAgent([
       {
-        events: [modelEvent(1, "partial")],
-        result: aborted([], "aborted"),
+        events: [
+          modelEvent(
+            1,
+            "partial",
+            [{ id: toolCallId, name: "clock", arguments: { zone: "UTC" } }],
+            { inputTokens: 4, outputTokens: 2 },
+          ),
+          {
+            type: AgentEventType.ToolStart,
+            step: 1,
+            callId: toolCallId,
+            name: "clock",
+          },
+          {
+            type: AgentEventType.ToolResult,
+            step: 1,
+            result: {
+              callId: toolCallId,
+              name: "clock",
+              content: "12:00",
+              isError: false,
+              durationMs: 3,
+            },
+          },
+        ],
+        result: aborted(partialMessages, "aborted"),
       },
     ]);
-    const { session } = await openSession();
+    const { session, storage } = await openSession();
     const chat = await ChatSession.open({
       agent,
       session,
@@ -347,7 +387,7 @@ describe("persisted ChatSession", () => {
 
     const result = await chat.ask("slow");
     expect(result.status).toBe(AgentStatus.Aborted);
-    expect(chat.messages).toEqual([]);
+    expect(chat.messages).toEqual(partialMessages);
 
     const records = await collect(session.read());
     const finished = records.at(-1)?.event;
@@ -357,10 +397,22 @@ describe("persisted ChatSession", () => {
     expect(finished.status).toBe(AgentStatus.Aborted);
     expect(finished.output).toBe("partial");
     expect(finished.steps).toBe(1);
+    expect(finished.messages).toEqual(partialMessages);
 
     const snapshot = await session.snapshot();
-    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.messages).toEqual(partialMessages);
     expect(snapshot.interruptedTurnId).toBeUndefined();
+    await chat.close();
+
+    // A fresh process must see the same partial transcript.
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    expect((await reopened.snapshot()).messages).toEqual(partialMessages);
+    await reopened.close();
   });
 
   test("resumes the committed conversation on reopen", async () => {

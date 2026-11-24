@@ -19,7 +19,7 @@ import type {
 import type { ContextManager, PreparedContext, TokenUsage } from "../types/context";
 import type { ToolCallId } from "../types/ids";
 import type { Message, ToolCall, UserMessage } from "../types/message";
-import type { Model, ModelResponse, ModelTool } from "../types/model";
+import type { Model, ModelRequest, ModelResponse, ModelTool } from "../types/model";
 import { ToolExecutionErrorKind } from "../types/tools";
 import type { ToolCatalog, ToolDefinition, ToolExecutionResult } from "../types/tools";
 import { ToolExecutionEngine } from "../tools/executor";
@@ -27,6 +27,7 @@ import type { ToolExecutionEngineOptions } from "../tools/executor";
 import { createModelTools } from "../tools/model-tools";
 import { validateToolDefinition } from "../tools/validation";
 import { isNonEmptyString } from "../util/is-non-empty-string";
+import { isRecord } from "../util/is-record";
 import { omitUndefined } from "../util/omit-undefined";
 import {
   appendUserMessage,
@@ -34,6 +35,8 @@ import {
   validateConversation,
 } from "./conversation";
 import { AgentEventChannels } from "./events";
+import { collectModelStream } from "./model-stream";
+import type { ModelStreamResult } from "./model-stream";
 import { readResponseUsage, validateModelResponse } from "./model-response";
 
 const DEFAULT_MAX_STEPS = 32;
@@ -85,6 +88,12 @@ function cloneResponseForEvent(response: ModelResponse): ModelResponse {
  */
 function cloneToolResultForEvent(result: ToolExecutionResult): ToolExecutionResult {
   return { ...result };
+}
+
+/** Best-effort text extraction for a response captured during cancellation. */
+function responseText(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.text !== "string") return undefined;
+  return value.text;
 }
 
 function syntheticToolResult(
@@ -424,6 +433,78 @@ export class Agent {
         });
       }
     };
+    /**
+     * Capture whatever a cancelled model call produced. A response that
+     * arrived just before cancellation is still recorded; tool calls get
+     * synthetic cancelled results so the partial conversation stays valid for
+     * the next run.
+     */
+    const commitAbortedResponse = async (
+      step: number,
+      rawResponse: unknown,
+      observeUsage = true,
+      emitResponse = true,
+    ): Promise<AgentResult> => {
+      let response: ModelResponse;
+      try {
+        response = validateModelResponse(rawResponse);
+      } catch {
+        const text = responseText(rawResponse);
+        if (text === undefined || text.trim().length === 0) return aborted();
+        response = { text, toolCalls: [] };
+      }
+
+      const toolCalls = response.toolCalls.filter(
+        (call) => !usedToolCallIds.has(call.id),
+      );
+      const text = response.text ?? "";
+      if (toolCalls.length === 0 && text.trim().length === 0) {
+        return aborted();
+      }
+
+      const committed: ModelResponse = omitUndefined({
+        text: text.length > 0 ? text : undefined,
+        toolCalls,
+        usage: response.usage,
+      });
+
+      if (observeUsage && committed.usage !== undefined) {
+        try {
+          this.context.observe(committed.usage, [...history]);
+        } catch (error) {
+          await emit({
+            type: AgentEventType.Warning,
+            step,
+            stage: AgentErrorStage.Context,
+            error: toError(error),
+          });
+        }
+      }
+
+      if (emitResponse) {
+        await emit({
+          type: AgentEventType.ModelResponse,
+          step,
+          response: cloneResponseForEvent(committed),
+          partial: true,
+        });
+      }
+      history.push({
+        role: "assistant",
+        ...(text.length > 0 ? { content: text } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      });
+      for (const call of toolCalls) usedToolCallIds.add(call.id);
+      if (toolCalls.length > 0) {
+        await appendSyntheticToolResults(
+          step,
+          toolCalls,
+          ERROR_MESSAGES.tools.executionCancelled,
+          ToolExecutionErrorKind.Cancelled,
+        );
+      }
+      return aborted();
+    };
 
     if (signal.aborted) return aborted();
 
@@ -473,25 +554,54 @@ export class Agent {
       const requestMessages = buildRequestMessages(history, stepContext.system, finalStep);
 
       steps = step;
+      const request: ModelRequest = {
+        messages: requestMessages,
+        tools: finalStep ? [] : modelTools,
+        signal,
+      };
       let rawResponse: ModelResponse;
-      try {
-        rawResponse = await this.model.generate({
-          messages: requestMessages,
-          tools: finalStep ? [] : modelTools,
-          signal,
-        });
-      } catch (error) {
-        if (signal.aborted) return aborted();
-        return fail(AgentErrorStage.Model, toError(error));
+      if (typeof this.model.streamText === "function") {
+        let streamed: ModelStreamResult;
+        try {
+          streamed = await collectModelStream(
+            this.model.streamText(request),
+            signal,
+          );
+        } catch (error) {
+          if (signal.aborted) return aborted();
+          return fail(AgentErrorStage.Model, toError(error));
+        }
+
+        const streamedUsage = readResponseUsage(streamed.response);
+        if (streamedUsage) {
+          usage.inputTokens += streamedUsage.inputTokens;
+          usage.outputTokens += streamedUsage.outputTokens;
+        }
+        if (streamed.aborted) {
+          return commitAbortedResponse(step, streamed.response);
+        }
+        rawResponse = streamed.response;
+      } else {
+        try {
+          rawResponse = await this.model.generate(request);
+        } catch (error) {
+          if (signal.aborted) return aborted();
+          return fail(AgentErrorStage.Model, toError(error));
+        }
+
+        const billedUsage = readResponseUsage(rawResponse);
+        if (billedUsage) {
+          usage.inputTokens += billedUsage.inputTokens;
+          usage.outputTokens += billedUsage.outputTokens;
+        }
       }
 
-      const billedUsage = readResponseUsage(rawResponse);
-      if (billedUsage) {
-        usage.inputTokens += billedUsage.inputTokens;
-        usage.outputTokens += billedUsage.outputTokens;
+      // A provider response that arrived before cancellation still belongs in
+      // the partial transcript. Only a call that never produced a response is
+      // discarded.
+      if (signal.aborted) {
+        return commitAbortedResponse(step, rawResponse);
       }
-
-      if (signal.aborted) return aborted();
 
       let response: ModelResponse;
       try {
@@ -530,7 +640,11 @@ export class Agent {
         step,
         response: cloneResponseForEvent(response),
       });
-      if (signal.aborted) return aborted();
+      if (signal.aborted) {
+        // The normal ModelResponse event was already emitted (and recorded by
+        // any interceptors) before this check, so only commit the transcript.
+        return commitAbortedResponse(step, response, false, false);
+      }
 
       const text = response.text ?? "";
       if (response.toolCalls.length === 0) {
