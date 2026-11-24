@@ -51,10 +51,10 @@ function failed(messages: readonly Message[]): AgentResult {
   };
 }
 
-function aborted(): AgentResult {
+function aborted(messages: readonly Message[] = []): AgentResult {
   return {
     status: AgentStatus.Aborted,
-    messages: [],
+    messages,
     output: "aborted",
     steps: 1,
     usage: { inputTokens: 0, outputTokens: 0 },
@@ -124,22 +124,26 @@ describe("ChatSession", () => {
     ]);
   });
 
-  test("abort stops the in-flight turn and discards its history", async () => {
+  test("abort stops the in-flight turn and keeps its partial history", async () => {
     let receivedSignal: AbortSignal | undefined;
+    const partial: Message[] = [
+      { role: "user", content: "slow" },
+      { role: "assistant", content: "partial" },
+    ];
     const agent: ChatAgent = {
       run(_input, options) {
         receivedSignal = options?.signal;
         return new Promise<AgentResult>((resolve) => {
           const signal = options?.signal;
           if (signal === undefined) {
-            resolve(aborted());
+            resolve(aborted(partial));
             return;
           }
           if (signal.aborted) {
-            resolve(aborted());
+            resolve(aborted(partial));
             return;
           }
-          signal.addEventListener("abort", () => resolve(aborted()), {
+          signal.addEventListener("abort", () => resolve(aborted(partial)), {
             once: true,
           });
         });
@@ -155,7 +159,7 @@ describe("ChatSession", () => {
     expect(result.status).toBe(AgentStatus.Aborted);
     expect(receivedSignal?.aborted).toBe(true);
     expect(session.isRunning).toBe(false);
-    expect(session.messages).toEqual([]);
+    expect(session.messages).toEqual(partial);
   });
 
   test("a throwing agent leaves the session usable and reset clears history", async () => {

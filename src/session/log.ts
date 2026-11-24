@@ -5,18 +5,14 @@ import {
   SessionLogError,
   toError,
 } from "../errors";
-import type {
-  EventLogRecord,
-} from "../types/event-log";
+import type { EventLogRecord } from "../types/event-log";
 import { AgentStatus } from "../types/agent";
 import { asEventLogStreamId } from "../types/ids";
 import type { SessionId, TurnId } from "../types/ids";
 import type { JsonObject } from "../types/json-schema";
 import type { Message } from "../types/message";
 import type { TokenUsage } from "../types/context";
-import {
-  SessionEventType,
-} from "../types/session";
+import { SessionEventType } from "../types/session";
 import type {
   SessionEvent,
   SessionEventLog,
@@ -50,15 +46,19 @@ export interface SessionLogOpenOptions {
 }
 
 /**
- * Final status of a recorded turn. Completed/max-steps turns commit a full
- * message snapshot; aborted turns keep the previously committed snapshot.
+ * Final status of a recorded turn. Every finished turn commits the conversation
+ * it reached: completed and max-steps turns commit their full snapshot, while
+ * aborted turns commit the partial snapshot recorded before cancellation.
  */
 export type FinishTurnInput =
   | {
       readonly status: AgentStatus.Completed | AgentStatus.MaxSteps;
       readonly messages: readonly Message[];
     }
-  | { readonly status: AgentStatus.Aborted };
+  | {
+      readonly status: AgentStatus.Aborted;
+      readonly messages: readonly Message[];
+    };
 
 function eventTurnId(event: SessionEvent): TurnId | undefined {
   switch (event.type) {
@@ -167,7 +167,10 @@ function readTurnValues(
 ): TurnValues {
   const values = emptyTurnValues();
   for (const event of events) {
-    if (event.type === SessionEventType.ModelResponded && event.turnId === turnId) {
+    if (
+      event.type === SessionEventType.ModelResponded &&
+      event.turnId === turnId
+    ) {
       values.responses.push(event);
     } else if (
       event.type === SessionEventType.ToolCompleted &&
@@ -202,7 +205,11 @@ function assertTurnFinishedMatches(
     mismatch("steps", String(derived.steps), String(finished.steps));
   }
   if (finished.output !== derived.output) {
-    mismatch("output", JSON.stringify(derived.output), JSON.stringify(finished.output));
+    mismatch(
+      "output",
+      JSON.stringify(derived.output),
+      JSON.stringify(finished.output),
+    );
   }
   if (
     finished.usage.inputTokens !== derived.usage.inputTokens ||
@@ -231,9 +238,7 @@ function assertTurnFinishedMatches(
   }
 }
 
-function retractedTurns(
-  records: readonly EventLogRecord<SessionEvent>[],
-): {
+function retractedTurns(records: readonly EventLogRecord<SessionEvent>[]): {
   readonly turns: ReadonlySet<TurnId>;
   readonly sequences: ReadonlySet<number>;
 } {
@@ -280,7 +285,8 @@ function retractedTurns(
  * Retractions are resolved in a first pass, so an event is excluded even when
  * its retraction was appended later. Compaction clears projection state and
  * replays only the summary plus later events; the original records remain in
- * storage.
+ * storage. A TurnFinished snapshot is authoritative for both completed and
+ * aborted turns, so partial progress survives an abort.
  */
 export function replaySession(
   sessionId: SessionId,
@@ -387,8 +393,8 @@ export function replaySession(
 
       case SessionEventType.ModelResponded:
         if (activeTurnId === event.turnId) {
-          // Pending state is not committed until TurnFinished supplies the
-          // authoritative full snapshot.
+          // Pending state is not projected until TurnFinished supplies the
+          // authoritative snapshot, which may be partial for an aborted turn.
         }
         break;
 
@@ -402,7 +408,7 @@ export function replaySession(
           event,
           deriveTurnValues(turnValues.get(event.turnId)),
         );
-        if (event.status !== "aborted" && "messages" in event) {
+        if (event.messages !== undefined) {
           messages = [...event.messages];
           messagesSequence = record.sequence;
         }
@@ -599,7 +605,11 @@ export class SessionLog {
       };
       const event: SessionTurnFinishedEvent =
         input.status === AgentStatus.Aborted
-          ? { ...base, status: AgentStatus.Aborted }
+          ? {
+              ...base,
+              status: AgentStatus.Aborted,
+              messages: [...input.messages],
+            }
           : { ...base, status: input.status, messages: [...input.messages] };
       return this.#append(event);
     });
@@ -642,9 +652,7 @@ export class SessionLog {
     return result;
   }
 
-  async #append(
-    event: SessionEvent,
-  ): Promise<EventLogRecord<SessionEvent>> {
+  async #append(event: SessionEvent): Promise<EventLogRecord<SessionEvent>> {
     this.#assertWritable();
 
     try {

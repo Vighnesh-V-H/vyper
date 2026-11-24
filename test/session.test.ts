@@ -130,7 +130,9 @@ describe("persisted session log", () => {
     const records: EventLogRecord<SessionEvent>[] = [];
     for await (const record of resumed.read()) records.push(record);
     expect(records[0]?.sequence).toBe(1);
-    expect(records.filter((record) => record.event.type === SessionEventType.Header)).toHaveLength(1);
+    expect(
+      records.filter((record) => record.event.type === SessionEventType.Header),
+    ).toHaveLength(1);
   });
 
   test("resume rejects a header with an incompatible session version", async () => {
@@ -347,6 +349,81 @@ describe("persisted session log", () => {
     ).toBe(true);
   });
 
+  test("replays the partial snapshot committed by an aborted turn", async () => {
+    const session = await openSession();
+    const turnId = asTurnId("turn-aborted");
+    const partialMessages: Message[] = [
+      { role: "user", content: "slow" },
+      { role: "assistant", content: "half an answer" },
+    ];
+
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "slow",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: response("half an answer"),
+      partial: true,
+    });
+    await session.append({
+      type: SessionEventType.TurnFinished,
+      turnId,
+      status: AgentStatus.Aborted,
+      output: "half an answer",
+      steps: 1,
+      usage: usage(),
+      messages: partialMessages,
+    });
+    await session.flush();
+
+    const snapshot = await session.snapshot();
+    expect(snapshot.messages).toEqual(partialMessages);
+    expect(snapshot.interruptedTurnId).toBeUndefined();
+  });
+
+  test("legacy aborted turns without a snapshot keep the committed history", async () => {
+    const session = await openSession();
+    const firstTurn = asTurnId("turn-first");
+    const abortedTurn = asTurnId("turn-legacy");
+    const firstMessages: Message[] = [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "one" },
+    ];
+
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId: firstTurn,
+      prompt: "first",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId: firstTurn,
+      step: 1,
+      response: response("one"),
+    });
+    await session.append(finished(firstTurn, "one", firstMessages));
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId: abortedTurn,
+      prompt: "legacy",
+    });
+    await session.append({
+      type: SessionEventType.TurnFinished,
+      turnId: abortedTurn,
+      status: AgentStatus.Aborted,
+      output: "",
+      steps: 0,
+      usage: usage(0, 0),
+    });
+    await session.flush();
+
+    expect((await session.snapshot()).messages).toEqual(firstMessages);
+  });
+
   test("failed turns can be retracted before they ever finish", async () => {
     const session = await openSession();
     const goodTurn = asTurnId("turn-good");
@@ -536,6 +613,41 @@ describe("SessionEventCodec", () => {
     expect(decoded.response.toolCalls[0]?.arguments).toEqual({
       nested: { value: 1 },
     });
+  });
+
+  test("decodes aborted partial snapshots and partial response markers", () => {
+    const aborted = codec.decode({
+      type: SessionEventType.TurnFinished,
+      turnId: "turn-1",
+      status: AgentStatus.Aborted,
+      output: "half",
+      steps: 1,
+      usage: { inputTokens: 1, outputTokens: 1 },
+      messages: [
+        { role: "user", content: "slow" },
+        { role: "assistant", content: "half" },
+      ],
+    });
+    if (aborted.type !== SessionEventType.TurnFinished) {
+      throw new Error("unexpected event type");
+    }
+    expect(aborted.status).toBe(AgentStatus.Aborted);
+    expect(aborted.messages).toEqual([
+      { role: "user", content: "slow" },
+      { role: "assistant", content: "half" },
+    ]);
+
+    const partial = codec.decode({
+      type: SessionEventType.ModelResponded,
+      turnId: "turn-1",
+      step: 1,
+      response: { text: "half", toolCalls: [] },
+      partial: true,
+    });
+    if (partial.type !== SessionEventType.ModelResponded) {
+      throw new Error("unexpected event type");
+    }
+    expect(partial.partial).toBe(true);
   });
 
   test("rejects non-JSON, non-finite, exotic, and cyclic arguments", () => {

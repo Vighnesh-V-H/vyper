@@ -7,7 +7,11 @@ import { MemoryEventLog } from "../src/event-log/memory";
 import { SessionEventCodec } from "../src/session/codec";
 import { ChatSession } from "../src/session/chat";
 import { SessionLog } from "../src/session/log";
-import { AgentErrorStage, AgentEventType, AgentStatus } from "../src/types/agent";
+import {
+  AgentErrorStage,
+  AgentEventType,
+  AgentStatus,
+} from "../src/types/agent";
 import type {
   AgentEvent,
   AgentResult,
@@ -15,11 +19,7 @@ import type {
 } from "../src/types/agent";
 import type { TokenUsage } from "../src/types/context";
 import type { EventLogRecord } from "../src/types/event-log";
-import {
-  asSessionId,
-  asToolCallId,
-  asTurnId,
-} from "../src/types/ids";
+import { asSessionId, asToolCallId, asTurnId } from "../src/types/ids";
 import type { Message, ToolCall } from "../src/types/message";
 import type { ChatAgent } from "../src/types/session";
 import type { SessionEvent } from "../src/types/session";
@@ -56,10 +56,7 @@ function completed(
   };
 }
 
-function failed(
-  messages: readonly Message[],
-  output: string,
-): AgentResult {
+function failed(messages: readonly Message[], output: string): AgentResult {
   return {
     status: AgentStatus.Error,
     stage: AgentErrorStage.Model,
@@ -71,10 +68,7 @@ function failed(
   };
 }
 
-function aborted(
-  messages: readonly Message[],
-  output: string,
-): AgentResult {
+function aborted(messages: readonly Message[], output: string): AgentResult {
   return {
     status: AgentStatus.Aborted,
     messages,
@@ -331,14 +325,54 @@ describe("persisted ChatSession", () => {
     expect(chat.messages).toEqual(thirdMessages);
   });
 
-  test("records an aborted turn without committing its history", async () => {
+  test("commits and resumes the partial history of an aborted turn", async () => {
+    const toolCallId = asToolCallId("call-aborted");
+    const partialMessages: Message[] = [
+      { role: "user", content: "slow" },
+      {
+        role: "assistant",
+        content: "partial",
+        toolCalls: [
+          { id: toolCallId, name: "clock", arguments: { zone: "UTC" } },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId,
+        content: "12:00",
+      },
+    ];
     const agent = scriptedAgent([
       {
-        events: [modelEvent(1, "partial")],
-        result: aborted([], "aborted"),
+        events: [
+          modelEvent(
+            1,
+            "partial",
+            [{ id: toolCallId, name: "clock", arguments: { zone: "UTC" } }],
+            { inputTokens: 4, outputTokens: 2 },
+          ),
+          {
+            type: AgentEventType.ToolStart,
+            step: 1,
+            callId: toolCallId,
+            name: "clock",
+          },
+          {
+            type: AgentEventType.ToolResult,
+            step: 1,
+            result: {
+              callId: toolCallId,
+              name: "clock",
+              content: "12:00",
+              isError: false,
+              durationMs: 3,
+            },
+          },
+        ],
+        result: aborted(partialMessages, "aborted"),
       },
     ]);
-    const { session } = await openSession();
+    const { session, storage } = await openSession();
     const chat = await ChatSession.open({
       agent,
       session,
@@ -347,7 +381,7 @@ describe("persisted ChatSession", () => {
 
     const result = await chat.ask("slow");
     expect(result.status).toBe(AgentStatus.Aborted);
-    expect(chat.messages).toEqual([]);
+    expect(chat.messages).toEqual(partialMessages);
 
     const records = await collect(session.read());
     const finished = records.at(-1)?.event;
@@ -357,10 +391,22 @@ describe("persisted ChatSession", () => {
     expect(finished.status).toBe(AgentStatus.Aborted);
     expect(finished.output).toBe("partial");
     expect(finished.steps).toBe(1);
+    expect(finished.messages).toEqual(partialMessages);
 
     const snapshot = await session.snapshot();
-    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.messages).toEqual(partialMessages);
     expect(snapshot.interruptedTurnId).toBeUndefined();
+    await chat.close();
+
+    // A fresh process must see the same partial transcript.
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    expect((await reopened.snapshot()).messages).toEqual(partialMessages);
+    await reopened.close();
   });
 
   test("resumes the committed conversation on reopen", async () => {
@@ -410,11 +456,51 @@ describe("persisted ChatSession", () => {
     await secondChat.close();
   });
 
+  test("preserves history when a custom aborted result is empty", async () => {
+    const firstMessages = turnMessages("first", "one");
+    const agent = scriptedAgent([
+      {
+        events: [modelEvent(1, "one")],
+        result: completed(firstMessages, "one"),
+      },
+      {
+        events: [],
+        result: aborted([], "aborted"),
+      },
+    ]);
+    const { session, storage } = await openSession();
+    const chat = await ChatSession.open({
+      agent,
+      session,
+      createTurnId: (() => {
+        let index = 0;
+        return () => asTurnId(`turn-empty-${++index}`);
+      })(),
+    });
+
+    await chat.ask("first");
+    const result = await chat.ask("second");
+
+    expect(result.status).toBe(AgentStatus.Aborted);
+    expect(result.messages).toEqual(firstMessages);
+    expect(chat.messages).toEqual(firstMessages);
+    expect((await session.snapshot()).messages).toEqual(firstMessages);
+    await chat.close();
+
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    expect((await reopened.snapshot()).messages).toEqual(firstMessages);
+    await reopened.close();
+  });
+
   test("persists and resumes through the file-backed event log", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vyper-chat-"));
     const codec = new SessionEventCodec();
-    const openLog = () =>
-      new FileEventLog<SessionEvent>({ directory, codec });
+    const openLog = () => new FileEventLog<SessionEvent>({ directory, codec });
 
     try {
       const firstMessages = turnMessages("first", "one");
@@ -550,6 +636,70 @@ describe("persisted ChatSession", () => {
     await resetting;
     expect(chat.messages).toEqual([]);
     expect((await session.snapshot()).messages).toEqual([]);
+  });
+
+  test("keeps the saved summary pending when an aborted snapshot omits it", async () => {
+    const { session, storage } = await openSession();
+    const turnId = asTurnId("turn-summary-aborted");
+    const oldMessages = turnMessages("old", "old answer");
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "old",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: { text: "old answer", toolCalls: [] },
+    });
+    const finished = await session.append({
+      type: SessionEventType.TurnFinished,
+      turnId,
+      status: AgentStatus.Completed,
+      output: "old answer",
+      steps: 1,
+      usage: zeroUsage(),
+      messages: oldMessages,
+    });
+    await session.append({
+      type: SessionEventType.Compaction,
+      summary: "saved context",
+      cutoffSequence: finished.sequence,
+      tokensBefore: 10,
+      at: 2_000,
+    });
+    await session.flush();
+    await session.close();
+
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    const agent = scriptedAgent([
+      { events: [], result: aborted([], "cancelled") },
+      {
+        events: [],
+        result: completed(
+          [
+            { role: "user", content: "saved context\n\ncontinue" },
+            { role: "assistant", content: "next" },
+          ],
+          "next",
+        ),
+      },
+    ]);
+    const chat = await ChatSession.open({ agent, session: reopened });
+
+    await chat.ask("continue");
+    await chat.ask("continue");
+    expect(agent.runs[1]).toEqual([
+      { role: "user", content: "saved context" },
+      { role: "user", content: "continue" },
+    ]);
+    await chat.close();
   });
 
   test("resumes with the saved compaction summary in the next request", async () => {

@@ -17,7 +17,6 @@ import type {
   SessionContextPreparedEvent,
   SessionToolCompletedEvent,
   SessionToolStartedEvent,
-  SessionTurnAbortedEvent,
   SessionTurnCommittedEvent,
   SessionTurnFinishedEvent,
   SessionTurnStartedEvent,
@@ -42,10 +41,7 @@ function invalid(label: string, expected: string): never {
   );
 }
 
-function expectRecord(
-  value: unknown,
-  label: string,
-): Record<string, unknown> {
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     invalid(label, "must be an object");
   }
@@ -106,6 +102,16 @@ function readOptionalString(
   return expectString(value, `${label}.${key}`);
 }
 
+function readOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): boolean | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  return expectBoolean(value, `${label}.${key}`);
+}
+
 function readOptionalJsonObject(
   record: Record<string, unknown>,
   key: string,
@@ -153,7 +159,8 @@ export function readJsonValue(
     seen.add(value);
     const result: JsonValue[] = [];
     for (let index = 0; index < value.length; index += 1) {
-      if (!(index in value)) invalid(`${label}[${index}]`, "must not be a hole");
+      if (!(index in value))
+        invalid(`${label}[${index}]`, "must not be a hole");
       result.push(readJsonValue(value[index], `${label}[${index}]`, seen));
     }
     seen.delete(value);
@@ -176,10 +183,7 @@ export function readJsonValue(
   invalid(label, "must be JSON-safe");
 }
 
-export function readJsonObject(
-  value: unknown,
-  label = "value",
-): JsonObject {
+export function readJsonObject(value: unknown, label = "value"): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     invalid(label, "must be a JSON object");
   }
@@ -300,10 +304,16 @@ function readMessage(value: unknown, label: string): Message {
   }
 }
 
-function readToolResult(
-  value: unknown,
-  label: string,
-): ToolExecutionResult {
+function readMessages(value: unknown, label: string): Message[] {
+  if (!Array.isArray(value)) {
+    invalid(label, "must be an array");
+  }
+  return value.map((message, index) =>
+    readMessage(message, `${label}[${index}]`),
+  );
+}
+
+function readToolResult(value: unknown, label: string): ToolExecutionResult {
   const record = expectRecord(value, label);
   const errorKindValue = record.errorKind;
   const errorKind =
@@ -343,10 +353,7 @@ function readHeader(value: unknown): SessionHeaderEvent {
       expectNonEmptyString(record.sessionId, "header.sessionId"),
     ),
     version: expectPositiveInteger(record.version, "header.version"),
-    timestamp: expectNonNegativeInteger(
-      record.timestamp,
-      "header.timestamp",
-    ),
+    timestamp: expectNonNegativeInteger(record.timestamp, "header.timestamp"),
     model: expectNonEmptyString(record.model, "header.model"),
     instructions: readOptionalString(record, "instructions", "header"),
     cwd: expectNonEmptyString(record.cwd, "header.cwd"),
@@ -354,9 +361,7 @@ function readHeader(value: unknown): SessionHeaderEvent {
   });
 }
 
-function readMetadataChanged(
-  value: unknown,
-): SessionMetadataChangedEvent {
+function readMetadataChanged(value: unknown): SessionMetadataChangedEvent {
   const record = expectRecord(value, "metadata");
   const event: SessionMetadataChangedEvent = omitUndefined({
     type: SessionEventType.MetadataChanged,
@@ -382,7 +387,9 @@ function readMetadataChanged(
   return event;
 }
 
-function readTurnStarted(value: Record<string, unknown>): SessionTurnStartedEvent {
+function readTurnStarted(
+  value: Record<string, unknown>,
+): SessionTurnStartedEvent {
   return {
     type: SessionEventType.TurnStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
@@ -390,7 +397,9 @@ function readTurnStarted(value: Record<string, unknown>): SessionTurnStartedEven
   };
 }
 
-function readStepStarted(value: Record<string, unknown>): SessionStepStartedEvent {
+function readStepStarted(
+  value: Record<string, unknown>,
+): SessionStepStartedEvent {
   return {
     type: SessionEventType.StepStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
@@ -416,12 +425,13 @@ function readContextPrepared(
 function readModelResponded(
   value: Record<string, unknown>,
 ): SessionModelRespondedEvent {
-  return {
+  return omitUndefined({
     type: SessionEventType.ModelResponded,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
     step: expectPositiveInteger(value.step, "event.step"),
     response: readPersistedModelResponse(value.response, "event.response"),
-  };
+    partial: readOptionalBoolean(value, "partial", "event"),
+  });
 }
 
 function readToolStarted(
@@ -431,9 +441,7 @@ function readToolStarted(
     type: SessionEventType.ToolStarted,
     turnId: asTurnId(expectNonEmptyString(value.turnId, "event.turnId")),
     step: expectPositiveInteger(value.step, "event.step"),
-    callId: asToolCallId(
-      expectNonEmptyString(value.callId, "event.callId"),
-    ),
+    callId: asToolCallId(expectNonEmptyString(value.callId, "event.callId")),
     name: expectNonEmptyString(value.name, "event.name"),
   };
 }
@@ -505,23 +513,22 @@ function readTurnFinished(
     "event.status",
   );
   if (status === AgentStatus.Aborted) {
-    const event: SessionTurnAbortedEvent = {
+    // Legacy records predate partial snapshots, so an absent messages field
+    // means "keep the previously committed conversation".
+    const messages =
+      value.messages === undefined
+        ? undefined
+        : readMessages(value.messages, "event.messages");
+    return omitUndefined({
       ...base,
       status: AgentStatus.Aborted,
-    };
-    return event;
+      messages,
+    });
   }
-  const messagesValue = value.messages;
-  if (!Array.isArray(messagesValue)) {
-    invalid("event.messages", "must be an array");
-  }
-  const messages = messagesValue.map((message, index) =>
-    readMessage(message, `event.messages[${index}]`),
-  );
   const event: SessionTurnCommittedEvent = {
     ...base,
     status,
-    messages,
+    messages: readMessages(value.messages, "event.messages"),
   };
   return event;
 }
@@ -629,8 +636,7 @@ export function persistedModelResponse(
   return omitUndefined({
     text: response.text,
     toolCalls,
-    usage:
-      response.usage === undefined ? undefined : { ...response.usage },
+    usage: response.usage === undefined ? undefined : { ...response.usage },
   });
 }
 

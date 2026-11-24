@@ -72,6 +72,11 @@ export interface AgentModelResponseEvent {
   type: AgentEventType.ModelResponse;
   step: number;
   response: ModelResponse;
+  /**
+   * True when a cancelled run captured the response as it stood at that
+   * moment. The text and tool calls may be incomplete.
+   */
+  partial?: boolean;
 }
 
 export interface AgentToolStartEvent {
@@ -137,7 +142,12 @@ export type AgentEventHandlerFor<TType extends AgentEventType> = (
 ) => void | Promise<void>;
 
 export interface AgentResultBase {
-  /** Conversation after the run. Always valid: every tool call has a result. */
+  /**
+   * Conversation after the run. Always valid: every tool call has a result.
+   * Aborted results contain the partial conversation reached, including the
+   * prompt; custom agents must not return an empty or replacement-only
+   * snapshot.
+   */
   readonly messages: readonly Message[];
   /**
    * Final assistant text. A max-steps run may still contain a real final answer

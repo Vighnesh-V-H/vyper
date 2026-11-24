@@ -16,6 +16,7 @@ import { asTurnId } from "../types/ids";
 import type {
   SessionErrorInfo,
   SessionEvent,
+  SessionModelRespondedEvent,
 } from "../types/session";
 import { SessionEventType } from "../types/session";
 import type { ToolExecutionResult } from "../types/tools";
@@ -84,13 +85,16 @@ function toSessionEvent(
         tokensEstimated: event.tokensEstimated,
       };
 
-    case AgentEventType.ModelResponse:
-      return {
+    case AgentEventType.ModelResponse: {
+      const responded: SessionModelRespondedEvent = omitUndefined({
         type: SessionEventType.ModelResponded,
         turnId,
         step: event.step,
         response: persistedModelResponse(event.response),
-      };
+        partial: event.partial,
+      });
+      return responded;
+    }
 
     case AgentEventType.ToolStart:
       return {
@@ -184,9 +188,9 @@ export class SessionRecorder {
   }
 
   /**
-   * Finish the current turn. Completed/max-steps runs commit their full
-   * message snapshot; aborted runs keep the previous one; failed runs and
-   * recording failures retract the turn.
+   * Finish the current turn. Completed, max-steps, and aborted runs commit the
+   * message snapshot they reached (aborted snapshots may be partial); failed
+   * runs and recording failures retract the turn.
    */
   async finish(result: AgentResult): Promise<void> {
     const turn = this.#turn;
@@ -214,10 +218,6 @@ export class SessionRecorder {
 
       if (result.status === AgentStatus.Error) {
         await this.#log.retractTurn(turn.turnId, errorMessage(result.error));
-      } else if (result.status === AgentStatus.Aborted) {
-        await this.#log.finishTurn(turn.turnId, {
-          status: AgentStatus.Aborted,
-        });
       } else {
         await this.#log.finishTurn(turn.turnId, {
           status: result.status,
