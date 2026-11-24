@@ -18,6 +18,11 @@ export type { SessionId, ToolCallId, TurnId } from "./ids";
  */
 export interface ChatAgent {
   readonly onEvent?: AgentEventHandler;
+  /**
+   * Aborted results must contain the partial conversation reached by the run,
+   * including at least its prompt. Custom agents must not return an empty or
+   * replacement-only snapshot for an aborted turn.
+   */
   run(
     input: string | readonly Message[],
     options?: AgentRunOptions,

@@ -192,18 +192,25 @@ export class ChatSession {
       };
 
       const result = await this.#agent.run(input, runOptions);
+      const committedResult: AgentResult =
+        result.status === AgentStatus.Aborted &&
+        result.messages.length === 0 &&
+        previous.length > 0
+          ? { ...result, messages: previous }
+          : result;
       // Record before committing in-memory history: if durability fails, the
       // session must not advance past what is actually stored.
-      if (this.#recorder !== undefined) await this.#recorder.finish(result);
-      if (result.status !== AgentStatus.Error) {
+      if (this.#recorder !== undefined)
+        await this.#recorder.finish(committedResult);
+      if (committedResult.status !== AgentStatus.Error) {
         // An aborted turn advances to the partial conversation it reached so
         // the next request (and the next process) can continue from it.
-        this.#messages = result.messages;
+        this.#messages = committedResult.messages;
         // The summary is now part of the committed conversation, so later
         // turns must not inject it again.
         this.#pendingSummary = undefined;
       }
-      return result;
+      return committedResult;
     } catch (error) {
       if (this.#recorder !== undefined) await this.#recorder.fail(error);
       throw error;

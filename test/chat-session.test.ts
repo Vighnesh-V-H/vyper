@@ -462,6 +462,47 @@ describe("persisted ChatSession", () => {
     await secondChat.close();
   });
 
+  test("preserves history when a custom aborted result is empty", async () => {
+    const firstMessages = turnMessages("first", "one");
+    const agent = scriptedAgent([
+      {
+        events: [modelEvent(1, "one")],
+        result: completed(firstMessages, "one"),
+      },
+      {
+        events: [],
+        result: aborted([], "aborted"),
+      },
+    ]);
+    const { session, storage } = await openSession();
+    const chat = await ChatSession.open({
+      agent,
+      session,
+      createTurnId: (() => {
+        let index = 0;
+        return () => asTurnId(`turn-empty-${++index}`);
+      })(),
+    });
+
+    await chat.ask("first");
+    const result = await chat.ask("second");
+
+    expect(result.status).toBe(AgentStatus.Aborted);
+    expect(result.messages).toEqual(firstMessages);
+    expect(chat.messages).toEqual(firstMessages);
+    expect((await session.snapshot()).messages).toEqual(firstMessages);
+    await chat.close();
+
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    expect((await reopened.snapshot()).messages).toEqual(firstMessages);
+    await reopened.close();
+  });
+
   test("persists and resumes through the file-backed event log", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vyper-chat-"));
     const codec = new SessionEventCodec();

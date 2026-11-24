@@ -442,8 +442,7 @@ export class Agent {
     const commitAbortedResponse = async (
       step: number,
       rawResponse: unknown,
-      observeUsage = true,
-      emitResponse = true,
+      alreadyRecorded = false,
     ): Promise<AgentResult> => {
       let response: ModelResponse;
       try {
@@ -468,7 +467,7 @@ export class Agent {
         usage: response.usage,
       });
 
-      if (observeUsage && committed.usage !== undefined) {
+      if (!alreadyRecorded && committed.usage !== undefined) {
         try {
           this.context.observe(committed.usage, [...history]);
         } catch (error) {
@@ -481,7 +480,7 @@ export class Agent {
         }
       }
 
-      if (emitResponse) {
+      if (!alreadyRecorded) {
         await emit({
           type: AgentEventType.ModelResponse,
           step,
@@ -643,7 +642,7 @@ export class Agent {
       if (signal.aborted) {
         // The normal ModelResponse event was already emitted (and recorded by
         // any interceptors) before this check, so only commit the transcript.
-        return commitAbortedResponse(step, response, false, false);
+        return commitAbortedResponse(step, response, true);
       }
 
       const text = response.text ?? "";
