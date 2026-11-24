@@ -206,9 +206,15 @@ export class ChatSession {
         // An aborted turn advances to the partial conversation it reached so
         // the next request (and the next process) can continue from it.
         this.#messages = committedResult.messages;
-        // The summary is now part of the committed conversation, so later
-        // turns must not inject it again.
-        this.#pendingSummary = undefined;
+        // Keep a saved summary pending until it is present in committed
+        // history. An aborted/custom agent may return a snapshot that omitted
+        // the injected summary entirely.
+        if (
+          summary !== undefined &&
+          containsSummary(committedResult.messages, summary)
+        ) {
+          this.#pendingSummary = undefined;
+        }
       }
       return committedResult;
     } catch (error) {

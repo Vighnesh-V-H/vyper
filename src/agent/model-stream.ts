@@ -131,15 +131,11 @@ class StreamAccumulator {
       case ModelStreamChunkType.ToolCallDelta: {
         const existing = this.#pending.get(chunk.toolCallId);
         const name = chunk.name ?? existing?.name;
+        const argumentFragments = existing?.arguments ?? [];
+        argumentFragments.push(chunk.argumentsDelta ?? "");
         this.#pending.set(
           chunk.toolCallId,
-          omitUndefined({
-            name,
-            arguments: [
-              ...(existing?.arguments ?? []),
-              chunk.argumentsDelta ?? "",
-            ],
-          }),
+          omitUndefined({ name, arguments: argumentFragments }),
         );
         break;
       }
@@ -285,6 +281,9 @@ export async function collectModelStream(
       }
     }
   } catch (error) {
+    // Ensure provider generators release resources when validation or
+    // accumulation fails, without allowing cleanup failures to mask the cause.
+    closeStream(iterator);
     if (!signal.aborted) throw error;
     aborted = true;
   } finally {

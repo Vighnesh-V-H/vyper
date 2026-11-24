@@ -638,6 +638,70 @@ describe("persisted ChatSession", () => {
     expect((await session.snapshot()).messages).toEqual([]);
   });
 
+  test("keeps the saved summary pending when an aborted snapshot omits it", async () => {
+    const { session, storage } = await openSession();
+    const turnId = asTurnId("turn-summary-aborted");
+    const oldMessages = turnMessages("old", "old answer");
+    await session.append({
+      type: SessionEventType.TurnStarted,
+      turnId,
+      prompt: "old",
+    });
+    await session.append({
+      type: SessionEventType.ModelResponded,
+      turnId,
+      step: 1,
+      response: { text: "old answer", toolCalls: [] },
+    });
+    const finished = await session.append({
+      type: SessionEventType.TurnFinished,
+      turnId,
+      status: AgentStatus.Completed,
+      output: "old answer",
+      steps: 1,
+      usage: zeroUsage(),
+      messages: oldMessages,
+    });
+    await session.append({
+      type: SessionEventType.Compaction,
+      summary: "saved context",
+      cutoffSequence: finished.sequence,
+      tokensBefore: 10,
+      at: 2_000,
+    });
+    await session.flush();
+    await session.close();
+
+    const reopened = await SessionLog.open({
+      log: storage,
+      sessionId,
+      model: "test-model",
+      cwd: "/work",
+    });
+    const agent = scriptedAgent([
+      { events: [], result: aborted([], "cancelled") },
+      {
+        events: [],
+        result: completed(
+          [
+            { role: "user", content: "saved context\n\ncontinue" },
+            { role: "assistant", content: "next" },
+          ],
+          "next",
+        ),
+      },
+    ]);
+    const chat = await ChatSession.open({ agent, session: reopened });
+
+    await chat.ask("continue");
+    await chat.ask("continue");
+    expect(agent.runs[1]).toEqual([
+      { role: "user", content: "saved context" },
+      { role: "user", content: "continue" },
+    ]);
+    await chat.close();
+  });
+
   test("resumes with the saved compaction summary in the next request", async () => {
     const { session, storage } = await openSession();
     const turnId = asTurnId("turn-summary");
