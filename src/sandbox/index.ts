@@ -27,7 +27,9 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
     let result: SandboxExecutionResult | undefined;
 
     try {
-      const normalizedRequest = await this.deps.normalizer.normalize(input, context);
+      const normalizedRequest = await this.stage("normalization-failed", () =>
+        this.deps.normalizer.normalize(input, context)
+      );
       if (
         normalizedRequest.requestId !== input.callId ||
         normalizedRequest.sessionId !== context.sessionId
@@ -42,11 +44,11 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         return this.failure(requestId, "cancelled", "Sandbox execution was cancelled.");
       }
 
-      const policy = await this.deps.policyStore.load(context);
-      decision = await this.deps.policyEngine.evaluate(request, {
-        ...context,
-        policy,
-      });
+      const policy = await this.stage("policy-error", () => this.deps.policyStore.load(context));
+      decision = await this.stage("policy-error", () => this.deps.policyEngine.evaluate(request, {
+          ...context,
+          policy,
+        }));
 
       if (decision.kind === "deny") {
         await this.audit(request, decision);
@@ -58,17 +60,19 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         };
       }
 
-      let activeGrants = await this.deps.approvals.activeGrants(context.sessionId);
-      await this.validateGrants(activeGrants);
+      let activeGrants = await this.stage("approval-failed", () =>
+        this.deps.approvals.activeGrants(context.sessionId)
+      );
+      await this.validateGrants(activeGrants, context.sessionId);
       let profileName = decision.profile;
       if (decision.kind === "escalate") {
-        const approval = await this.deps.approvals.request({
-          request,
-          reason: decision.reason,
-          profile: decision.profile,
-          scope: decision.scope,
-          scopeHash: await this.scopeHash(decision.scope),
-        });
+        const approval = await this.stage("approval-failed", async () => this.deps.approvals.request({
+            request,
+            reason: decision.reason,
+            profile: decision.profile,
+            scope: decision.scope,
+            scopeHash: await this.scopeHash(decision.scope),
+          }));
         if (approval.kind === "declined") {
           await this.audit(request, decision);
           return {
@@ -85,27 +89,31 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         ) {
           throw new SandboxFailure("approval-failed", "Approval grant is expired or belongs to another session.");
         }
-        await this.validateGrant(approval.grant);
+        await this.validateGrant(approval.grant, context.sessionId);
         activeGrants = [...activeGrants, approval.grant];
       }
 
-      const profile = await this.deps.profiles.get(profileName);
+      const profile = await this.stage("profile-unknown", () => this.deps.profiles.get(profileName));
       if (!profile) {
         throw new SandboxFailure("profile-unknown", `Sandbox profile '${profileName}' was not found.`);
       }
-      const spec = await this.deps.compiler.compile(profile, request, activeGrants);
+      const spec = await this.stage("compile-failed", () =>
+        this.deps.compiler.compile(profile, request, activeGrants)
+      );
       const backend = this.deps.broker;
       const executionResult = request.execution.kind === "command"
-        ? await backend.run(spec, {
-          ...request.execution.command,
-          environmentOverrides: this.allowedEnvironment(request, profile.environmentAllowlist),
-        }, options.signal === undefined ? {} : { signal: options.signal })
-        : await this.deps.trustedInProcess.run(
-          request,
-          options.signal === undefined ? {} : { signal: options.signal },
-        );
+        ? await this.stage("execution-failed", () => backend.run(spec, {
+            ...request.execution.command,
+            environmentOverrides: this.allowedEnvironment(request, profile.environmentAllowlist),
+          }, options.signal === undefined ? {} : { signal: options.signal }))
+        : await this.stage("execution-failed", () => this.deps.trustedInProcess.run(
+            request,
+            options.signal === undefined ? {} : { signal: options.signal },
+          ));
       result = executionResult;
-      const output = this.deps.outputFilter.filter(executionResult, request);
+      const output = await this.stage("output-filter-failed", () =>
+        this.deps.outputFilter.filter(executionResult, request)
+      );
       await this.audit(request, decision, result);
       return { kind: "completed", requestId, result, output };
     } catch (error) {
@@ -152,15 +160,39 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
     return this.hash(JSON.stringify(scope));
   }
 
-  private async validateGrants(grants: readonly Grant[]): Promise<void> {
+  private async validateGrants(
+    grants: readonly Grant[],
+    sessionId: string,
+  ): Promise<void> {
     for (const grant of grants) {
-      await this.validateGrant(grant);
+      await this.validateGrant(grant, sessionId);
     }
   }
 
-  private async validateGrant(grant: Grant): Promise<void> {
+  private async validateGrant(grant: Grant, sessionId: string): Promise<void> {
+    if (
+      grant.sessionId !== sessionId ||
+      !Number.isFinite(Date.parse(grant.expiresAt)) ||
+      Date.parse(grant.expiresAt) <= Date.now()
+    ) {
+      throw new SandboxFailure("approval-failed", "Approval grant is expired or belongs to another session.");
+    }
     if (grant.scopeHash !== await this.scopeHash(grant.scope)) {
       throw new SandboxFailure("approval-failed", "Approval grant scope integrity check failed.");
+    }
+  }
+
+  private async stage<T>(
+    code: SandboxFailureCode,
+    operation: () => T | Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof SandboxFailure) throw error;
+      throw new SandboxFailure(code, error instanceof Error ? error.message : "Sandbox stage failed.", {
+        cause: error,
+      });
     }
   }
 

@@ -164,7 +164,7 @@ describe("SandboxExecutor", () => {
       { cwd, sessionId: "session-1" },
     );
 
-    expect(outcome).toMatchObject({ kind: "failed", code: "internal", message: "filter failed" });
+    expect(outcome).toMatchObject({ kind: "failed", code: "output-filter-failed", message: "filter failed" });
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
       decision: "allow",
