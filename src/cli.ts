@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Agent } from "./agent/agent";
 import { ChatSession } from "./session/chat";
-import { WindowedContext } from "./context/windowed";
+import { FullHistoryContext } from "./context/full-history";
 import { ERROR_MESSAGES, MissingApiKeyError, errorMessage } from "./errors";
 import { FileEventLog } from "./event-log/file";
 import { GeminiModel } from "./providers/gemini";
@@ -19,8 +19,6 @@ import type { SessionEvent } from "./types/session";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const MAX_STEPS = 12;
-const MAX_CONTEXT_TOKENS = 24_000;
-const KEEP_RECENT_MESSAGES = 40;
 const DEFAULT_SESSION_ID = "default";
 const DEFAULT_SESSION_DIRECTORY = resolve(
   homedir(),
@@ -51,10 +49,7 @@ export async function main(): Promise<void> {
     model: new GeminiModel({ apiKey, model }),
     instructions,
     tools: createToolRegistry({ tools: [clockTool] }),
-    context: new WindowedContext({
-      maxTokens: MAX_CONTEXT_TOKENS,
-      keepMessages: KEEP_RECENT_MESSAGES,
-    }),
+    context: new FullHistoryContext(),
     cwd: process.cwd(),
     maxSteps: MAX_STEPS,
     onEvent: printEvent,
@@ -76,8 +71,7 @@ export async function main(): Promise<void> {
     cwd: process.cwd(),
     appConfig: {
       maxSteps: MAX_STEPS,
-      maxContextTokens: MAX_CONTEXT_TOKENS,
-      keepRecentMessages: KEEP_RECENT_MESSAGES,
+      preserveFullHistory: true,
     },
   });
   const chat = await ChatSession.open({ agent, session });

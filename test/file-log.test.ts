@@ -64,6 +64,9 @@ describe("FileEventLog", () => {
       await handle.flush();
 
       expect(first.sequence).toBe(1);
+      expect(first.parentId).toBeNull();
+      expect(second.id).not.toBe(first.id);
+      expect(second.parentId).toBe(first.id);
       expect(second.sequence).toBe(2);
       expect(handle.nextSequence).toBe(3);
       expect(await collect(handle.read())).toEqual([first, second]);

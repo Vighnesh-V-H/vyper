@@ -526,7 +526,22 @@ function readEnvelope<TEvent>(
     invalid(`line ${line} has an invalid timestamp`);
   }
   if (!("event" in value)) invalid(`line ${line} is missing an event`);
+  const sequence = value.sequence;
+  const id = value.id === undefined
+    ? `${streamId}:${sequence}`
+    : typeof value.id === "string" && value.id.length > 0
+      ? value.id
+      : invalid(`line ${line} has an invalid id`);
+  const parentId = value.parentId === undefined
+    ? sequence === 1
+      ? null
+      : `${streamId}:${sequence - 1}`
+    : value.parentId === null || typeof value.parentId === "string"
+      ? value.parentId
+      : invalid(`line ${line} has an invalid parentId`);
   return {
+    id,
+    parentId,
     version,
     streamId,
     sequence: value.sequence,
@@ -567,6 +582,10 @@ function parseCompleteRecords<TEvent>(
       invalid(
         `line ${lineNumber} has sequence ${record.sequence}; expected ${expected}`,
       );
+    }
+    const expectedParent = records.at(-1)?.id ?? null;
+    if (record.parentId !== expectedParent) {
+      invalid(`line ${lineNumber} does not link to its preceding entry`);
     }
     records.push(record);
   }
@@ -849,6 +868,8 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     // gap in the stream. The codec also returns the persisted, JSON-safe view.
     const validated = this.#codec.decode(event);
     const record: EventLogRecord<TEvent> = {
+      id: `${this.streamId}:${this.#nextSequence}`,
+      parentId: this.#records.at(-1)?.id ?? null,
       version: this.#version,
       streamId: this.streamId,
       sequence: this.#nextSequence,
