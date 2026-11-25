@@ -35,6 +35,9 @@ export type { FinishTurnInput, SessionLogOpenOptions } from "./session/log";
 export { SessionRecorder } from "./session/recorder";
 export type { SessionRecorderOptions } from "./session/recorder";
 
+export { SandboxExecutor, hashGrantIntegrity } from "./sandbox";
+export * from "./schema/sandbox";
+
 export { ToolRegistry } from "./tools/registry";
 export { ToolExecutionEngine, executeTool } from "./tools/executor";
 export type {
