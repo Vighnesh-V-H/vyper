@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Agent } from "./agent/agent";
@@ -19,10 +19,9 @@ import type { SessionEvent } from "./types/session";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const MAX_STEPS = 12;
-const DEFAULT_SESSION_ID = "default";
 const DEFAULT_SESSION_DIRECTORY = resolve(
   homedir(),
-  ".pi",
+  ".vyper",
   "agent",
   "sessions",
 );
@@ -55,43 +54,68 @@ export async function main(): Promise<void> {
     onEvent: printEvent,
   });
 
-  const sessionId =
-    process.env.VYPER_SESSION_ID?.trim() || DEFAULT_SESSION_ID;
   const sessionDirectory = resolveSessionDirectory(
     process.cwd(),
     process.env.VYPER_SESSION_DIR,
   );
-  const codec = new SessionEventCodec();
-  const session = await SessionLog.open({
-    log: new FileEventLog<SessionEvent>({ directory: sessionDirectory, codec }),
-    codec,
-    sessionId: asSessionId(sessionId),
-    model,
-    instructions,
-    cwd: process.cwd(),
-    appConfig: {
-      maxSteps: MAX_STEPS,
-      preserveFullHistory: true,
-    },
-  });
-  const chat = await ChatSession.open({ agent, session });
-
-  try {
+  const configuredSessionId = process.env.VYPER_SESSION_ID?.trim();
+  const openChat = async (firstPrompt: string, forceNew = false) => {
+    const sessionId =
+      !forceNew && configuredSessionId
+        ? configuredSessionId
+        : createPromptSessionId(firstPrompt);
+    const codec = new SessionEventCodec();
+    const session = await SessionLog.open({
+      log: new FileEventLog<SessionEvent>({
+        directory: sessionDirectory,
+        codec,
+      }),
+      codec,
+      sessionId: asSessionId(sessionId),
+      model,
+      instructions,
+      cwd: process.cwd(),
+      appConfig: {
+        maxSteps: MAX_STEPS,
+        preserveFullHistory: true,
+      },
+    });
+    const chat = await ChatSession.open({ agent, session });
     if (process.stdin.isTTY && chat.messages.length > 0) {
       console.log(
         `Resumed session "${sessionId}" with ${chat.messages.length} messages.`,
       );
     }
+    return { chat, sessionId };
+  };
 
-    if (prompt.length > 0) {
+  if (prompt.length > 0) {
+    const { chat } = await openChat(prompt);
+    try {
       await runOnce(chat, prompt);
-      return;
+    } finally {
+      await chat.close();
     }
-
-    await runInteractive(chat);
-  } finally {
-    await chat.close();
+    return;
   }
+
+  await runInteractive(openChat);
+}
+
+/** Create a filesystem-safe, unique session id whose prefix comes from its first prompt. */
+export function createPromptSessionId(
+  prompt: string,
+  timestamp = Date.now(),
+): string {
+  const slug = prompt
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return `${slug || "chat"}-${timestamp}-${randomUUID().slice(0, 8)}`;
 }
 
 /**
@@ -129,10 +153,16 @@ async function runOnce(chat: ChatSession, prompt: string): Promise<void> {
  * Each turn hands the previous result's messages back to the agent. Ctrl+C
  * aborts the current turn while it runs, and exits while waiting for input.
  */
-async function runInteractive(chat: ChatSession): Promise<void> {
+async function runInteractive(
+  openChat: (
+    firstPrompt: string,
+    forceNew?: boolean,
+  ) => Promise<{ readonly chat: ChatSession; readonly sessionId: string }>,
+): Promise<void> {
+  let current: ChatSession | undefined;
   const onInterrupt = (): void => {
-    if (chat.isRunning) {
-      chat.abort();
+    if (current?.isRunning) {
+      current.abort();
       return;
     }
     process.exit(130);
@@ -140,9 +170,10 @@ async function runInteractive(chat: ChatSession): Promise<void> {
   process.on("SIGINT", onInterrupt);
 
   if (process.stdin.isTTY) {
-    console.log("vyper chat. Type /exit to quit, /new to clear history.");
+    console.log("vyper chat. Type /exit to quit, /new to start a separate chat.");
   }
 
+  let forceNew = false;
   try {
     while (true) {
       const line = await readPrompt();
@@ -154,13 +185,22 @@ async function runInteractive(chat: ChatSession): Promise<void> {
       const command = prompt.toLowerCase();
       if (EXIT_COMMANDS.has(command)) break;
       if (RESET_COMMANDS.has(command)) {
-        await chat.reset();
-        console.log("History cleared.");
+        if (current !== undefined) {
+          await current.close();
+          current = undefined;
+        }
+        forceNew = true;
+        console.log("Started a new chat.");
         continue;
       }
 
       try {
-        const result = await chat.ask(prompt);
+        if (current === undefined) {
+          const opened = await openChat(prompt, forceNew);
+          current = opened.chat;
+          forceNew = false;
+        }
+        const result = await current.ask(prompt);
         reportTurnResult(result);
       } catch (error) {
         console.error(errorMessage(error));
@@ -168,6 +208,7 @@ async function runInteractive(chat: ChatSession): Promise<void> {
     }
   } finally {
     process.off("SIGINT", onInterrupt);
+    if (current !== undefined) await current.close();
   }
 }
 

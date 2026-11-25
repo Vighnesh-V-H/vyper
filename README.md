@@ -26,7 +26,7 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 ## Session persistence
 
 Sessions are stored as append-only JSONL under
-`~/.pi/agent/sessions/<project-key>/` by default. The key is a stable SHA-256
+`~/.vyper/agent/sessions/<project-key>/` by default. The key is a stable SHA-256
 hash of the resolved project path, so same-named directories in different
 locations cannot share session history. Each JSONL record is a typed event with
 an `id` and `parentId` link. The prompt event is flushed before the model call;
