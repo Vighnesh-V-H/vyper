@@ -25,19 +25,28 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 
 ## Session persistence
 
-Sessions are stored as append-only JSONL under `.vyper/sessions/`. Each turn is
-recorded as it runs and flushed before the committed conversation advances.
-Completed, max-steps, and aborted turns commit the conversation they reached, so
-cancelling a turn keeps its prompt, any streamed assistant text, and tool
-results recorded before cancellation. Turns interrupted by a process crash (no
-`TurnFinished` record) and failed turns are retracted rather than folded into
+Sessions are stored as append-only JSONL under
+`~/.pi/agent/sessions/<project-key>/` by default. The key is a stable SHA-256
+hash of the resolved project path, so same-named directories in different
+locations cannot share session history. Each JSONL record is a typed event with
+an `id` and `parentId` link. The prompt event is flushed before the model call;
+completed turns append their full message snapshot. Completed, max-steps, and
+aborted turns commit the conversation they reached, preserving partial progress
+on cancellation. Restarting the CLI resumes the last committed conversation.
+Failed turns are retracted from active history while their events remain in the
+append-only log.
+
+The CLI sends the full restored conversation on every model call; it does not
+silently drop older messages. Very long conversations can exceed the model's
+context limit and then fail explicitly at the provider rather than losing
 history.
 
 - `VYPER_SESSION_ID` selects a session (default: `default`).
-- `VYPER_SESSION_DIR` overrides the storage directory.
+- `VYPER_SESSION_DIR` overrides the storage directory (relative paths resolve
+  from the project directory).
 - `/new` and `/clear` append a durable reset.
 
-`.vyper/` is excluded from git. Library users can compose `FileEventLog`,
+Library users can compose `FileEventLog`,
 `SessionLog.open()`, and `ChatSession.open()` directly.
 
 To type check:

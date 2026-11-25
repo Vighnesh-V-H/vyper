@@ -15,6 +15,10 @@ export type { EventLogStreamId } from "./ids";
  * duplicated streams, and incompatible formats during replay.
  */
 export interface EventLogRecord<TEvent> {
+  /** Stable entry identity within the stream. */
+  readonly id: string;
+  /** Parent entry identity; null marks the root entry. */
+  readonly parentId: string | null;
   /** Envelope schema version. Must match the codec used by the adapter. */
   readonly version: number;
   readonly streamId: EventLogStreamId;

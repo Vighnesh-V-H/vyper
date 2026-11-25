@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline/promises";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Agent } from "./agent/agent";
 import { ChatSession } from "./session/chat";
-import { WindowedContext } from "./context/windowed";
+import { FullHistoryContext } from "./context/full-history";
 import { ERROR_MESSAGES, MissingApiKeyError, errorMessage } from "./errors";
 import { FileEventLog } from "./event-log/file";
 import { GeminiModel } from "./providers/gemini";
@@ -17,10 +19,13 @@ import type { SessionEvent } from "./types/session";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const MAX_STEPS = 12;
-const MAX_CONTEXT_TOKENS = 24_000;
-const KEEP_RECENT_MESSAGES = 40;
 const DEFAULT_SESSION_ID = "default";
-const DEFAULT_SESSION_DIRECTORY = ".vyper/sessions";
+const DEFAULT_SESSION_DIRECTORY = resolve(
+  homedir(),
+  ".pi",
+  "agent",
+  "sessions",
+);
 const EXIT_COMMANDS = new Set(["/exit", "/quit"]);
 const RESET_COMMANDS = new Set(["/new", "/clear"]);
 
@@ -44,10 +49,7 @@ export async function main(): Promise<void> {
     model: new GeminiModel({ apiKey, model }),
     instructions,
     tools: createToolRegistry({ tools: [clockTool] }),
-    context: new WindowedContext({
-      maxTokens: MAX_CONTEXT_TOKENS,
-      keepMessages: KEEP_RECENT_MESSAGES,
-    }),
+    context: new FullHistoryContext(),
     cwd: process.cwd(),
     maxSteps: MAX_STEPS,
     onEvent: printEvent,
@@ -55,9 +57,9 @@ export async function main(): Promise<void> {
 
   const sessionId =
     process.env.VYPER_SESSION_ID?.trim() || DEFAULT_SESSION_ID;
-  const sessionDirectory = resolve(
+  const sessionDirectory = resolveSessionDirectory(
     process.cwd(),
-    process.env.VYPER_SESSION_DIR?.trim() || DEFAULT_SESSION_DIRECTORY,
+    process.env.VYPER_SESSION_DIR,
   );
   const codec = new SessionEventCodec();
   const session = await SessionLog.open({
@@ -69,8 +71,7 @@ export async function main(): Promise<void> {
     cwd: process.cwd(),
     appConfig: {
       maxSteps: MAX_STEPS,
-      maxContextTokens: MAX_CONTEXT_TOKENS,
-      keepRecentMessages: KEEP_RECENT_MESSAGES,
+      preserveFullHistory: true,
     },
   });
   const chat = await ChatSession.open({ agent, session });
@@ -91,6 +92,22 @@ export async function main(): Promise<void> {
   } finally {
     await chat.close();
   }
+}
+
+/**
+ * Resolve the project-scoped durable session directory. The explicit override
+ * retains its historical project-relative behavior; the default follows Pi's
+ * per-user session layout.
+ */
+export function resolveSessionDirectory(
+  cwd: string,
+  override: string | undefined,
+): string {
+  const configured = override?.trim();
+  if (configured) return resolve(cwd, configured);
+  const projectPath = resolve(cwd);
+  const projectKey = createHash("sha256").update(projectPath).digest("hex");
+  return resolve(DEFAULT_SESSION_DIRECTORY, projectKey);
 }
 
 /** Non-interactive mode: one prompt from argv, then exit. */

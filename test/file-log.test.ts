@@ -64,6 +64,9 @@ describe("FileEventLog", () => {
       await handle.flush();
 
       expect(first.sequence).toBe(1);
+      expect(first.parentId).toBeNull();
+      expect(second.id).not.toBe(first.id);
+      expect(second.parentId).toBe(first.id);
       expect(second.sequence).toBe(2);
       expect(handle.nextSequence).toBe(3);
       expect(await collect(handle.read())).toEqual([first, second]);
@@ -80,6 +83,34 @@ describe("FileEventLog", () => {
         "two",
       ]);
       expect(records.map((record) => record.sequence)).toEqual([1, 2]);
+      await reopened.close();
+    });
+  });
+
+  test("serializes parent links for concurrent appends", async () => {
+    await withDirectory(async (directory) => {
+      const handle = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      const [first, second, third] = await Promise.all([
+        handle.append({ value: "one" }),
+        handle.append({ value: "two" }),
+        handle.append({ value: "three" }),
+      ]);
+      await handle.flush();
+
+      expect(second?.parentId).toBe(first?.id);
+      expect(third?.parentId).toBe(second?.id);
+      await handle.close();
+
+      const reopened = await new FileEventLog<Payload>({
+        directory,
+        codec,
+      }).open(streamId);
+      expect(
+        (await collect(reopened.read())).map((record) => record.parentId),
+      ).toEqual([null, first?.id, second?.id]);
       await reopened.close();
     });
   });
@@ -304,6 +335,30 @@ describe("FileEventLog", () => {
       await reopened.close();
     });
   });
+
+  test(
+    "rejects a complete unterminated final record with the wrong parent",
+    async () => {
+      await withDirectory(async (directory) => {
+        const path = join(directory, "stream-1.jsonl");
+        const record = {
+          id: "stream-1:1",
+          parentId: "missing-parent",
+          version: 1,
+          streamId: "stream-1",
+          sequence: 1,
+          timestamp: 1,
+          event: { value: "one" },
+        };
+        await writeFile(path, JSON.stringify(record), "utf8");
+
+        await expect(
+          new FileEventLog<Payload>({ directory, codec }).open(streamId),
+        ).rejects.toThrow(/does not link to its preceding entry/);
+        expect(await readFile(path, "utf8")).toBe(JSON.stringify(record));
+      });
+    },
+  );
 
   test("validates appended events through the codec before writing", async () => {
     await withDirectory(async (directory) => {

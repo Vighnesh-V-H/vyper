@@ -68,6 +68,8 @@ class MemoryEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
   async append(event: TEvent): Promise<EventLogRecord<TEvent>> {
     this.#assertWritable();
     const record: EventLogRecord<TEvent> = {
+      id: `${this.streamId}:${this.#state.nextSequence}`,
+      parentId: this.#state.records.at(-1)?.id ?? null,
       version: this.#version,
       streamId: this.streamId,
       sequence: this.#state.nextSequence,

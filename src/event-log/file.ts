@@ -526,7 +526,22 @@ function readEnvelope<TEvent>(
     invalid(`line ${line} has an invalid timestamp`);
   }
   if (!("event" in value)) invalid(`line ${line} is missing an event`);
+  const sequence = value.sequence;
+  const id = value.id === undefined
+    ? `${streamId}:${sequence}`
+    : typeof value.id === "string" && value.id.length > 0
+      ? value.id
+      : invalid(`line ${line} has an invalid id`);
+  const parentId = value.parentId === undefined
+    ? sequence === 1
+      ? null
+      : `${streamId}:${sequence - 1}`
+    : value.parentId === null || typeof value.parentId === "string"
+      ? value.parentId
+      : invalid(`line ${line} has an invalid parentId`);
   return {
+    id,
+    parentId,
     version,
     streamId,
     sequence: value.sequence,
@@ -568,9 +583,21 @@ function parseCompleteRecords<TEvent>(
         `line ${lineNumber} has sequence ${record.sequence}; expected ${expected}`,
       );
     }
+    assertParentLink(records, record, lineNumber);
     records.push(record);
   }
   return records;
+}
+
+function assertParentLink<TEvent>(
+  precedingRecords: readonly EventLogRecord<TEvent>[],
+  record: EventLogRecord<TEvent>,
+  lineNumber: number,
+): void {
+  const expectedParent = precedingRecords.at(-1)?.id ?? null;
+  if (record.parentId !== expectedParent) {
+    invalid(`line ${lineNumber} does not link to its preceding entry`);
+  }
 }
 
 function parseRecords<TEvent>(
@@ -629,6 +656,7 @@ function parseRecords<TEvent>(
       `line ${lineNumber} has sequence ${record.sequence}; expected ${lineNumber}`,
     );
   }
+  assertParentLink(records, record, lineNumber);
   records.push(record);
   return { records, validBytes: data.length, needsNewline: true };
 }
@@ -811,6 +839,8 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
   readonly #codec: EventLogCodec<TEvent>;
   readonly #releaseLock: () => Promise<void>;
   #nextSequence: number;
+  /** Last entry ID accepted for writing, including queued appends. */
+  #lastAcceptedId: string | null;
   /** Length of the prefix of #records covered by a successful fsync. */
   #durableCount: number;
   #queue: Promise<void> = Promise.resolve();
@@ -835,6 +865,7 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     this.#codec = codec;
     this.#releaseLock = releaseLock;
     this.#nextSequence = records.length + 1;
+    this.#lastAcceptedId = records.at(-1)?.id ?? null;
     // Records parsed at open came from the file, so they are already on disk.
     this.#durableCount = records.length;
   }
@@ -848,14 +879,19 @@ class FileEventLogHandle<TEvent> implements EventLogHandle<TEvent> {
     // Validate before assigning a sequence so a rejected event cannot leave a
     // gap in the stream. The codec also returns the persisted, JSON-safe view.
     const validated = this.#codec.decode(event);
+    const sequence = this.#nextSequence;
+    const id = `${this.streamId}:${sequence}`;
     const record: EventLogRecord<TEvent> = {
+      id,
+      parentId: this.#lastAcceptedId,
       version: this.#version,
       streamId: this.streamId,
-      sequence: this.#nextSequence,
+      sequence,
       timestamp: Date.now(),
       event: validated,
     };
     this.#nextSequence += 1;
+    this.#lastAcceptedId = id;
 
     const operation = this.#queue.then(() => this.#write(record));
     this.#queue = operation.then(
