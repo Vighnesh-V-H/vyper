@@ -2,7 +2,8 @@
   "dependencies": {
     "@ai-sdk/google": "^4.0.121",
     "ai": "^7.0.173",
-    "dotenv": "^18.0.10"
+    "dotenv": "^18.0.10",
+    "zod": "^4.6.7"
   },
   "name": "vyper",
   "module": "index.ts",

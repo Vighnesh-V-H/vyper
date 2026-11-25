@@ -2,6 +2,7 @@ import { VyperError } from "./base";
 import { ErrorCode } from "./codes";
 import type { ConfigurationErrorCode } from "./codes";
 import { ERROR_MESSAGES } from "./messages";
+import type { SandboxFailureCode } from "../types/sandbox";
 
 // Configuration
 
@@ -115,6 +116,19 @@ export class ToolTimeoutError extends VyperError {
       ERROR_MESSAGES.executor.timedOut(timeoutMs),
       options,
     );
+  }
+}
+
+// Sandboxing
+
+/** A classified failure in sandbox normalization, policy, or execution. */
+export class SandboxFailure extends VyperError {
+  constructor(
+    readonly failureCode: SandboxFailureCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(ErrorCode.SandboxFailure, message, options);
   }
 }
 

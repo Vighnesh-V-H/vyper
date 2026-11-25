@@ -24,6 +24,7 @@ export enum ErrorCode {
   ToolExecutionFailed = "tool/execution-failed",
   ToolCancelled = "tool/cancelled",
   ToolTimeout = "tool/timeout",
+  SandboxFailure = "sandbox/failure",
   EventLogInvalid = "event-log/invalid",
   EventLogPoisoned = "event-log/poisoned",
   SessionLogInvalid = "session-log/invalid",
