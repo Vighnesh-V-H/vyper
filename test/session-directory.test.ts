@@ -2,14 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { resolveSessionDirectory } from "../src/cli";
+import { createPromptSessionId, resolveSessionDirectory } from "../src/cli";
+
+describe("createPromptSessionId", () => {
+  test("uses a readable sanitized prompt prefix and unique suffix", () => {
+    const first = createPromptSessionId("  Fix Café: add tests!  ", 123);
+    const second = createPromptSessionId("  Fix Café: add tests!  ", 123);
+
+    expect(first).toContain("fix-cafe-add-tests");
+    expect(first).toMatch(/^[a-z0-9-]+$/);
+    expect(first).not.toBe(second);
+  });
+});
 
 describe("resolveSessionDirectory", () => {
   test("uses the full resolved project path as a stable isolation key", () => {
     const projectPath = resolve("/work/acme");
     const key = createHash("sha256").update(projectPath).digest("hex");
     expect(resolveSessionDirectory(projectPath, undefined)).toBe(
-      resolve(homedir(), ".pi", "agent", "sessions", key),
+      resolve(homedir(), ".vyper", "agent", "sessions", key),
     );
   });
 
@@ -29,7 +40,7 @@ describe("resolveSessionDirectory", () => {
     const projectPath = resolve("/work/acme");
     const key = createHash("sha256").update(projectPath).digest("hex");
     expect(resolveSessionDirectory(projectPath, "  ")).toBe(
-      resolve(homedir(), ".pi", "agent", "sessions", key),
+      resolve(homedir(), ".vyper", "agent", "sessions", key),
     );
   });
 });
