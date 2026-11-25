@@ -2,10 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import {
-  createPromptSessionId,
-  resolveSessionDirectory,
-} from "../src/cli";
+import { createPromptSessionId, resolveSessionDirectory } from "../src/cli";
 
 describe("createPromptSessionId", () => {
   test("uses a readable sanitized prompt prefix and unique suffix", () => {

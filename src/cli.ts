@@ -120,7 +120,7 @@ export function createPromptSessionId(
 
 /**
  * Resolve the project-scoped durable session directory. The explicit override
- * retains its historical project-relative behavior; the default follows Pi's
+ * retains its historical project-relative behavior; the default uses a
  * per-user session layout.
  */
 export function resolveSessionDirectory(
@@ -170,7 +170,9 @@ async function runInteractive(
   process.on("SIGINT", onInterrupt);
 
   if (process.stdin.isTTY) {
-    console.log("vyper chat. Type /exit to quit, /new to start a separate chat.");
+    console.log(
+      "vyper chat. Type /exit to quit, /new to start a separate chat.",
+    );
   }
 
   let forceNew = false;
