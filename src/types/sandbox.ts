@@ -333,6 +333,13 @@ export interface SandboxBroker {
   ): Promise<SandboxExecutionResult>;
 }
 
+export interface TrustedInProcessExecutor {
+  run(
+    request: NormalizedSandboxRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SandboxExecutionResult>;
+}
+
 export interface UntrustedToolOutput {
   readonly trust: "untrusted";
   readonly text: string;
@@ -431,6 +438,7 @@ export interface SandboxedToolExecutorDeps {
   readonly approvals: ApprovalProvider;
   readonly compiler: SandboxProfileCompiler;
   readonly broker: SandboxBroker;
+  readonly trustedInProcess: TrustedInProcessExecutor;
   readonly outputFilter: ToolOutputFilter;
   readonly audit: SandboxAuditSink;
   readonly options: SandboxedToolExecutorOptions;

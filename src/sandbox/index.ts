@@ -22,6 +22,8 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
   ): Promise<SandboxedToolOutcome> {
     const requestId = input.callId;
     let request: NormalizedSandboxRequest | undefined;
+    let decision: SandboxPolicyDecision | undefined;
+    let result: SandboxExecutionResult | undefined;
 
     try {
       request = await this.deps.normalizer.normalize(input, context);
@@ -30,7 +32,7 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       }
 
       const policy = await this.deps.policyStore.load(context);
-      const decision = await this.deps.policyEngine.evaluate(request, {
+      decision = await this.deps.policyEngine.evaluate(request, {
         ...context,
         policy,
       });
@@ -80,16 +82,17 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       }
       const spec = await this.deps.compiler.compile(profile, request, activeGrants);
       const backend = this.deps.broker;
-      if (request.execution.kind !== "command") {
-        throw new SandboxFailure("execution-failed", "Trusted in-process execution is not supported by the sandbox executor.");
-      }
-
-      const command = request.execution.command;
-      const result = await backend.run(spec, {
-        ...command,
-        environmentOverrides: this.allowedEnvironment(request, profile.environmentAllowlist),
-      }, options.signal === undefined ? {} : { signal: options.signal });
-      const output = this.deps.outputFilter.filter(result, request);
+      const executionResult = request.execution.kind === "command"
+        ? await backend.run(spec, {
+          ...request.execution.command,
+          environmentOverrides: this.allowedEnvironment(request, profile.environmentAllowlist),
+        }, options.signal === undefined ? {} : { signal: options.signal })
+        : await this.deps.trustedInProcess.run(
+          request,
+          options.signal === undefined ? {} : { signal: options.signal },
+        );
+      result = executionResult;
+      const output = this.deps.outputFilter.filter(executionResult, request);
       await this.audit(request, decision, result);
       return { kind: "completed", requestId, result, output };
     } catch (error) {
@@ -97,12 +100,16 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       const message = error instanceof Error ? error.message : "Sandbox execution failed.";
       if (request) {
         try {
-          await this.deps.audit.record(await this.auditRecord(request, {
-            kind: "deny",
-            ruleId: "engine-error",
-            source: "engine-error",
-            reason: message,
-          }));
+          await this.deps.audit.record(await this.auditRecord(
+            request,
+            decision ?? {
+              kind: "deny",
+              ruleId: "engine-error",
+              source: "engine-error",
+              reason: message,
+            },
+            result,
+          ));
         } catch {
           if (this.deps.options.auditFailureMode === "fail-closed") {
             return this.failure(requestId, "audit-failed", "Sandbox audit recording failed.");

@@ -167,6 +167,7 @@ export type {
   ToolCapabilities,
   ToolNormalizer,
   ToolOutputFilter,
+  TrustedInProcessExecutor,
   UntrustedToolOutput,
 } from "./sandbox";
 
