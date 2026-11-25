@@ -26,11 +26,13 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 ## Session persistence
 
 Sessions are stored as append-only JSONL under
-`~/.pi/agent/sessions/<project-key>/` by default. Each turn is recorded as it
-runs and flushed before the committed conversation advances. Completed,
-max-steps, and aborted turns commit the conversation they reached, so cancelling
-a turn keeps its prompt and any partial progress. Turns interrupted by a
-process crash and failed turns are retracted from active history.
+`~/.pi/agent/sessions/<project-key>/` by default. The key is a stable SHA-256
+hash of the resolved project path, so same-named directories in different
+locations cannot share session history. Each turn is recorded as it runs and
+flushed before the committed conversation advances. Completed, max-steps, and
+aborted turns commit the conversation they reached, so cancellation preserves
+partial progress. Turns interrupted by a process crash and failed turns are
+retracted from active history.
 
 - `VYPER_SESSION_ID` selects a session (default: `default`).
 - `VYPER_SESSION_DIR` overrides the storage directory (relative paths resolve
