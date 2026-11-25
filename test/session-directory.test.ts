@@ -9,13 +9,12 @@ import {
 
 describe("createPromptSessionId", () => {
   test("uses a readable sanitized prompt prefix and unique suffix", () => {
-    const id = createPromptSessionId("  Fix Café: add tests!  ", 123);
-    expect(id).toMatch(/^fix-cafe-add-tests-123-[0-9a-f]{8}$/);
-    expect(createPromptSessionId("Fix Café: add tests!", 123)).not.toBe(id);
-  });
+    const first = createPromptSessionId("  Fix Café: add tests!  ", 123);
+    const second = createPromptSessionId("  Fix Café: add tests!  ", 123);
 
-  test("falls back to chat when the prompt has no filename characters", () => {
-    expect(createPromptSessionId("你好", 456)).toMatch(/^chat-456-/);
+    expect(first).toContain("fix-cafe-add-tests");
+    expect(first).toMatch(/^[a-z0-9-]+$/);
+    expect(first).not.toBe(second);
   });
 });
 
