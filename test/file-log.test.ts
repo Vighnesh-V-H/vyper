@@ -358,7 +358,7 @@ describe("FileEventLog", () => {
         expect(await readFile(path, "utf8")).toBe(JSON.stringify(record));
       });
     },
-  });
+  );
 
   test("validates appended events through the codec before writing", async () => {
     await withDirectory(async (directory) => {
