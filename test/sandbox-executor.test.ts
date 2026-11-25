@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { asToolCallId } from "../src/types/ids";
-import { SandboxExecutor } from "../src/sandbox";
+import { hashGrantIntegrity, SandboxExecutor } from "../src/sandbox";
 import type {
   CanonicalPath,
   NormalizedSandboxRequest,
@@ -63,6 +63,28 @@ const executionResult: SandboxExecutionResult = {
 };
 
 describe("SandboxExecutor", () => {
+  test("grant integrity hashes bind session, expiration, and scope", async () => {
+    const grant = {
+      sessionId: "session-1",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      scope: {
+        addReadPaths: [],
+        addWritePaths: [],
+        addNetworkHosts: [],
+        addEnvironmentVariables: [],
+        allowSubprocess: false,
+      },
+    };
+    const hash = await hashGrantIntegrity(grant);
+    expect(await hashGrantIntegrity(grant)).toBe(hash);
+    expect(await hashGrantIntegrity({ ...grant, sessionId: "session-2" })).not.toBe(hash);
+    expect(await hashGrantIntegrity({ ...grant, expiresAt: "2031-01-01T00:00:00.000Z" })).not.toBe(hash);
+    expect(await hashGrantIntegrity({
+      ...grant,
+      scope: { ...grant.scope, allowSubprocess: true },
+    })).not.toBe(hash);
+  });
+
   test("denies a request before profile compilation or backend execution", async () => {
     const records: unknown[] = [];
     const deps: SandboxedToolExecutorDeps = {

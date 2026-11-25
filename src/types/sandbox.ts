@@ -238,7 +238,7 @@ export interface SandboxPolicyEngine {
 
 export interface Grant {
   readonly id: string;
-  /** Hash covers the exact session, expiry, and complete permission scope. */
+  /** SHA-256 of the grant's sessionId, expiresAt, and complete scope. */
   readonly scopeHash: string;
   readonly sessionId: string;
   readonly scope: ScopeDelta;
@@ -279,28 +279,6 @@ export interface SandboxProfileCompiler {
     request: NormalizedSandboxRequest,
     grants: readonly Grant[],
   ): Promise<SandboxSpec>;
-}
-
-export type BackendAvailability =
-  | { readonly available: true }
-  | { readonly available: false; readonly reason: string };
-
-export interface BackendRunOptions {
-  readonly signal: AbortSignal;
-  /** Sanitized non-secret environment only; credentials belong in the proxy. */
-  readonly environment: Readonly<Record<string, string>>;
-  readonly proxySocketPath?: CanonicalPath;
-}
-
-export interface SandboxBackend {
-  readonly name: string;
-  readonly tier: IsolationTier;
-  available(): Promise<BackendAvailability>;
-  run(
-    spec: SandboxSpec,
-    command: SandboxCommand,
-    options: BackendRunOptions,
-  ): Promise<SandboxExecutionResult>;
 }
 
 export type TerminationReason =

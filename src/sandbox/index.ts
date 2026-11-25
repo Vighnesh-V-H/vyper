@@ -12,6 +12,19 @@ import type {
 import type { NormalizationContext, SandboxExecutionResult } from "../types/sandbox";
 import type { ToolExecutionRequest } from "../types/tools";
 
+/** Hashes the immutable identity and permission scope of a persisted grant. */
+export async function hashGrantIntegrity(
+  grant: Pick<Grant, "sessionId" | "expiresAt" | "scope">,
+): Promise<string> {
+  const payload = JSON.stringify({
+    sessionId: grant.sessionId,
+    expiresAt: grant.expiresAt,
+    scope: grant.scope,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** Coordinates normalization, policy, approval, compilation, and backend execution. */
 export class SandboxExecutor implements SandboxedToolExecutorContract {
   constructor(private readonly deps: SandboxedToolExecutorDeps) {}
@@ -40,23 +53,25 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         );
       }
       request = normalizedRequest;
+      const normalized = normalizedRequest;
       if (options.signal?.aborted) {
         return this.failure(requestId, "cancelled", "Sandbox execution was cancelled.");
       }
 
       const policy = await this.stage("policy-error", () => this.deps.policyStore.load(context));
-      decision = await this.stage("policy-error", () => this.deps.policyEngine.evaluate(request, {
-          ...context,
-          policy,
-        }));
+      const policyDecision = await this.stage("policy-error", () => this.deps.policyEngine.evaluate(normalized, {
+        ...context,
+        policy,
+      }));
+      decision = policyDecision;
 
-      if (decision.kind === "deny") {
-        await this.audit(request, decision);
+      if (policyDecision.kind === "deny") {
+        await this.audit(normalized, policyDecision);
         return {
           kind: "denied",
           requestId,
-          reason: decision.reason,
-          ruleId: decision.ruleId,
+          reason: policyDecision.reason,
+          ruleId: policyDecision.ruleId,
         };
       }
 
@@ -64,30 +79,25 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         this.deps.approvals.activeGrants(context.sessionId)
       );
       await this.validateGrants(activeGrants, context.sessionId);
-      let profileName = decision.profile;
-      if (decision.kind === "escalate") {
+      const profileName = policyDecision.profile;
+      if (policyDecision.kind === "escalate") {
         const approval = await this.stage("approval-failed", async () => this.deps.approvals.request({
-            request,
-            reason: decision.reason,
-            profile: decision.profile,
-            scope: decision.scope,
-            scopeHash: await this.scopeHash(decision.scope),
+            request: normalized,
+            reason: policyDecision.reason,
+            profile: policyDecision.profile,
+            scope: policyDecision.scope,
+            scopeHash: await this.scopeHash(policyDecision.scope),
           }));
         if (approval.kind === "declined") {
-          await this.audit(request, decision);
+          await this.audit(normalized, policyDecision);
           return {
             kind: "approval-declined",
             requestId,
             ...(approval.reason === undefined ? {} : { reason: approval.reason }),
           };
         }
-        if (
-          approval.grant.sessionId !== context.sessionId ||
-          approval.grant.scopeHash !== await this.scopeHash(decision.scope) ||
-          !Number.isFinite(Date.parse(approval.grant.expiresAt)) ||
-          Date.parse(approval.grant.expiresAt) <= Date.now()
-        ) {
-          throw new SandboxFailure("approval-failed", "Approval grant is expired or belongs to another session.");
+        if (await this.scopeHash(approval.grant.scope) !== await this.scopeHash(policyDecision.scope)) {
+          throw new SandboxFailure("approval-failed", "Approval grant scope does not match the requested scope.");
         }
         await this.validateGrant(approval.grant, context.sessionId);
         activeGrants = [...activeGrants, approval.grant];
@@ -98,23 +108,24 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         throw new SandboxFailure("profile-unknown", `Sandbox profile '${profileName}' was not found.`);
       }
       const spec = await this.stage("compile-failed", () =>
-        this.deps.compiler.compile(profile, request, activeGrants)
+        this.deps.compiler.compile(profile, normalized, activeGrants)
       );
       const backend = this.deps.broker;
-      const executionResult = request.execution.kind === "command"
+      const execution = normalized.execution;
+      const executionResult = execution.kind === "command"
         ? await this.stage("execution-failed", () => backend.run(spec, {
-            ...request.execution.command,
-            environmentOverrides: this.allowedEnvironment(request, profile.environmentAllowlist),
+            ...execution.command,
+            environmentOverrides: this.allowedEnvironment(normalized, profile.environmentAllowlist),
           }, options.signal === undefined ? {} : { signal: options.signal }))
         : await this.stage("execution-failed", () => this.deps.trustedInProcess.run(
-            request,
+            normalized,
             options.signal === undefined ? {} : { signal: options.signal },
           ));
       result = executionResult;
       const output = await this.stage("output-filter-failed", () =>
-        this.deps.outputFilter.filter(executionResult, request)
+        this.deps.outputFilter.filter(executionResult, normalized)
       );
-      await this.audit(request, decision, result);
+      await this.audit(normalized, policyDecision, result);
       return { kind: "completed", requestId, result, output };
     } catch (error) {
       const code = error instanceof SandboxFailure ? error.failureCode : "internal";
@@ -177,8 +188,8 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
     ) {
       throw new SandboxFailure("approval-failed", "Approval grant is expired or belongs to another session.");
     }
-    if (grant.scopeHash !== await this.scopeHash(grant.scope)) {
-      throw new SandboxFailure("approval-failed", "Approval grant scope integrity check failed.");
+    if (grant.scopeHash !== await hashGrantIntegrity(grant)) {
+      throw new SandboxFailure("approval-failed", "Approval grant integrity check failed.");
     }
   }
 
