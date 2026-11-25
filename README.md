@@ -25,16 +25,16 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 
 ## Session persistence
 
-Sessions are stored as append-only JSONL under `.vyper/sessions/`. Each turn is
-recorded as it runs and flushed before the committed conversation advances.
-Completed, max-steps, and aborted turns commit the conversation they reached, so
-cancelling a turn keeps its prompt, any streamed assistant text, and tool
-results recorded before cancellation. Turns interrupted by a process crash (no
-`TurnFinished` record) and failed turns are retracted rather than folded into
-history.
+Sessions are stored as append-only JSONL under
+`~/.pi/agent/sessions/<project-key>/` by default. Each turn is recorded as it
+runs and flushed before the committed conversation advances. Completed,
+max-steps, and aborted turns commit the conversation they reached, so cancelling
+a turn keeps its prompt and any partial progress. Turns interrupted by a
+process crash and failed turns are retracted from active history.
 
 - `VYPER_SESSION_ID` selects a session (default: `default`).
-- `VYPER_SESSION_DIR` overrides the storage directory.
+- `VYPER_SESSION_DIR` overrides the storage directory (relative paths resolve
+  from the project directory).
 - `/new` and `/clear` append a durable reset.
 
 `.vyper/` is excluded from git. Library users can compose `FileEventLog`,

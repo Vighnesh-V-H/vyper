@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, resolve } from "node:path";
 import { Agent } from "./agent/agent";
 import { ChatSession } from "./session/chat";
 import { WindowedContext } from "./context/windowed";
@@ -20,7 +21,12 @@ const MAX_STEPS = 12;
 const MAX_CONTEXT_TOKENS = 24_000;
 const KEEP_RECENT_MESSAGES = 40;
 const DEFAULT_SESSION_ID = "default";
-const DEFAULT_SESSION_DIRECTORY = ".vyper/sessions";
+const DEFAULT_SESSION_DIRECTORY = resolve(
+  homedir(),
+  ".pi",
+  "agent",
+  "sessions",
+);
 const EXIT_COMMANDS = new Set(["/exit", "/quit"]);
 const RESET_COMMANDS = new Set(["/new", "/clear"]);
 
@@ -55,9 +61,9 @@ export async function main(): Promise<void> {
 
   const sessionId =
     process.env.VYPER_SESSION_ID?.trim() || DEFAULT_SESSION_ID;
-  const sessionDirectory = resolve(
+  const sessionDirectory = resolveSessionDirectory(
     process.cwd(),
-    process.env.VYPER_SESSION_DIR?.trim() || DEFAULT_SESSION_DIRECTORY,
+    process.env.VYPER_SESSION_DIR,
   );
   const codec = new SessionEventCodec();
   const session = await SessionLog.open({
@@ -91,6 +97,20 @@ export async function main(): Promise<void> {
   } finally {
     await chat.close();
   }
+}
+
+/**
+ * Resolve the project-scoped durable session directory. The explicit override
+ * retains its historical project-relative behavior; the default follows Pi's
+ * per-user session layout.
+ */
+export function resolveSessionDirectory(
+  cwd: string,
+  override: string | undefined,
+): string {
+  const configured = override?.trim();
+  if (configured) return resolve(cwd, configured);
+  return resolve(DEFAULT_SESSION_DIRECTORY, basename(resolve(cwd)));
 }
 
 /** Non-interactive mode: one prompt from argv, then exit. */
