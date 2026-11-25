@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { Agent } from "./agent/agent";
 import { ChatSession } from "./session/chat";
 import { WindowedContext } from "./context/windowed";
@@ -110,7 +111,9 @@ export function resolveSessionDirectory(
 ): string {
   const configured = override?.trim();
   if (configured) return resolve(cwd, configured);
-  return resolve(DEFAULT_SESSION_DIRECTORY, basename(resolve(cwd)));
+  const projectPath = resolve(cwd);
+  const projectKey = createHash("sha256").update(projectPath).digest("hex");
+  return resolve(DEFAULT_SESSION_DIRECTORY, projectKey);
 }
 
 /** Non-interactive mode: one prompt from argv, then exit. */

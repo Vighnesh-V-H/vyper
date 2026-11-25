@@ -26,7 +26,9 @@ Set `GOOGLE_GENERATIVE_AI_API_KEY` before running.
 ## Session persistence
 
 Sessions are stored as append-only JSONL under
-`~/.pi/agent/sessions/<project>/` by default. Each turn is recorded as it runs
+`~/.pi/agent/sessions/<project-key>/` by default. The key is a stable SHA-256
+hash of the resolved project path, so same-named directories in different
+locations cannot share session history. Each turn is recorded as it runs
 and flushed before the committed conversation advances, so restarting the CLI
 resumes the last committed turn. Interrupted and failed turns are retracted
 rather than folded into history.
