@@ -4,6 +4,7 @@ import type {
   SandboxAuditRecord,
   SandboxPolicyDecision,
   SandboxFailureCode,
+  Grant,
   SandboxedToolExecutor as SandboxedToolExecutorContract,
   SandboxedToolExecutorDeps,
   SandboxedToolOutcome,
@@ -26,7 +27,17 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
     let result: SandboxExecutionResult | undefined;
 
     try {
-      request = await this.deps.normalizer.normalize(input, context);
+      const normalizedRequest = await this.deps.normalizer.normalize(input, context);
+      if (
+        normalizedRequest.requestId !== input.callId ||
+        normalizedRequest.sessionId !== context.sessionId
+      ) {
+        throw new SandboxFailure(
+          "normalization-failed",
+          "Normalized sandbox request identity does not match the caller.",
+        );
+      }
+      request = normalizedRequest;
       if (options.signal?.aborted) {
         return this.failure(requestId, "cancelled", "Sandbox execution was cancelled.");
       }
@@ -48,6 +59,7 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       }
 
       let activeGrants = await this.deps.approvals.activeGrants(context.sessionId);
+      await this.validateGrants(activeGrants);
       let profileName = decision.profile;
       if (decision.kind === "escalate") {
         const approval = await this.deps.approvals.request({
@@ -73,6 +85,7 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
         ) {
           throw new SandboxFailure("approval-failed", "Approval grant is expired or belongs to another session.");
         }
+        await this.validateGrant(approval.grant);
         activeGrants = [...activeGrants, approval.grant];
       }
 
@@ -137,6 +150,18 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
 
   private async scopeHash(scope: unknown): Promise<string> {
     return this.hash(JSON.stringify(scope));
+  }
+
+  private async validateGrants(grants: readonly Grant[]): Promise<void> {
+    for (const grant of grants) {
+      await this.validateGrant(grant);
+    }
+  }
+
+  private async validateGrant(grant: Grant): Promise<void> {
+    if (grant.scopeHash !== await this.scopeHash(grant.scope)) {
+      throw new SandboxFailure("approval-failed", "Approval grant scope integrity check failed.");
+    }
   }
 
   private async hash(value: string): Promise<string> {

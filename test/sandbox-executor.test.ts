@@ -14,7 +14,7 @@ const cwd = "/workspace" as CanonicalPath;
 
 function request(): NormalizedSandboxRequest {
   return {
-    requestId: "request-1",
+    requestId: "call-1",
     sessionId: "session-1",
     toolName: "shell",
     original: { callId: asToolCallId("call-1"), name: "shell", arguments: {} },
@@ -86,7 +86,7 @@ describe("SandboxExecutor", () => {
       trustedInProcess: { run: async () => { throw new Error("must not run"); } },
       outputFilter: { filter: () => { throw new Error("must not filter"); } },
       audit: { record: async (record) => { records.push(record); } },
-      options: { auditFailureMode: "fail-closed", escalateOnViolation: false },
+      options: { auditFailureMode: "fail-closed" },
     };
 
     const executor = new SandboxExecutor(deps);
@@ -124,7 +124,7 @@ describe("SandboxExecutor", () => {
       trustedInProcess: { run: async () => { trustedCalls += 1; return executionResult; } },
       outputFilter: { filter: () => ({ trust: "untrusted", text: "hello", truncated: false, redactionCount: 0 }) },
       audit: { record: async () => {} },
-      options: { auditFailureMode: "fail-closed", escalateOnViolation: false },
+      options: { auditFailureMode: "fail-closed" },
     };
 
     const outcome = await new SandboxExecutor(deps).execute(
@@ -156,7 +156,7 @@ describe("SandboxExecutor", () => {
           records.push(record);
         },
       },
-      options: { auditFailureMode: "best-effort", escalateOnViolation: false },
+      options: { auditFailureMode: "best-effort" },
     };
 
     const outcome = await new SandboxExecutor(deps).execute(

@@ -427,7 +427,6 @@ export type SandboxedToolOutcome =
 
 export interface SandboxedToolExecutorOptions {
   readonly auditFailureMode: "fail-closed" | "best-effort";
-  readonly escalateOnViolation: boolean;
 }
 
 export interface SandboxedToolExecutorDeps {
