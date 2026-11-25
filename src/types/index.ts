@@ -143,6 +143,7 @@ export type {
   SandboxAuditSink,
   SandboxBroker,
   SandboxCommand,
+  SandboxExecutionMetadata,
   SandboxExecutionResult,
   SandboxFailureCode,
   SandboxNetworkPolicy,

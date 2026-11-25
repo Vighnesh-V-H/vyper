@@ -1,15 +1,19 @@
 import { SandboxFailure } from "../errors";
 import type {
+  ApprovalOutcome,
+  ApprovalRequest,
+  Grant,
   NormalizedSandboxRequest,
   SandboxAuditRecord,
-  SandboxPolicyDecision,
+  SandboxExecutionMetadata,
+  SandboxExecutionResult,
   SandboxFailureCode,
-  Grant,
+  SandboxPolicyDecision,
   SandboxedToolExecutor as SandboxedToolExecutorContract,
   SandboxedToolExecutorDeps,
   SandboxedToolOutcome,
 } from "../types/sandbox";
-import type { NormalizationContext, SandboxExecutionResult } from "../types/sandbox";
+import type { NormalizationContext } from "../types/sandbox";
 import type { ToolExecutionRequest } from "../types/tools";
 
 /** Hashes the immutable identity and permission scope of a persisted grant. */
@@ -35,9 +39,11 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
     options: { readonly signal?: AbortSignal } = {},
   ): Promise<SandboxedToolOutcome> {
     const requestId = input.callId;
+    const signal = options.signal;
     let request: NormalizedSandboxRequest | undefined;
     let decision: SandboxPolicyDecision | undefined;
     let result: SandboxExecutionResult | undefined;
+    let approvalRecord: SandboxAuditRecord["approval"] | undefined;
 
     try {
       const normalizedRequest = await this.stage("normalization-failed", () =>
@@ -54,7 +60,7 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       }
       request = normalizedRequest;
       const normalized = normalizedRequest;
-      if (options.signal?.aborted) {
+      if (signal?.aborted) {
         return this.failure(requestId, "cancelled", "Sandbox execution was cancelled.");
       }
 
@@ -81,26 +87,36 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       await this.validateGrants(activeGrants, context.sessionId);
       const profileName = policyDecision.profile;
       if (policyDecision.kind === "escalate") {
-        const approval = await this.stage("approval-failed", async () => this.deps.approvals.request({
-            request: normalized,
-            reason: policyDecision.reason,
-            profile: policyDecision.profile,
-            scope: policyDecision.scope,
-            scopeHash: await this.scopeHash(policyDecision.scope),
-          }));
-        if (approval.kind === "declined") {
+        const scopeHash = await this.scopeHash(policyDecision.scope);
+        const approvalRequest: ApprovalRequest = {
+          request: normalized,
+          reason: policyDecision.reason,
+          profile: policyDecision.profile,
+          scope: policyDecision.scope,
+          scopeHash,
+        };
+        const approvalOutcome = await this.stage("approval-failed", () =>
+          this.requestApproval(approvalRequest, signal)
+        );
+        if (approvalOutcome.kind === "declined") {
           await this.audit(normalized, policyDecision);
           return {
             kind: "approval-declined",
             requestId,
-            ...(approval.reason === undefined ? {} : { reason: approval.reason }),
+            ...(approvalOutcome.reason === undefined ? {} : { reason: approvalOutcome.reason }),
           };
         }
-        if (await this.scopeHash(approval.grant.scope) !== await this.scopeHash(policyDecision.scope)) {
+        if (await this.scopeHash(approvalOutcome.grant.scope) !== scopeHash) {
           throw new SandboxFailure("approval-failed", "Approval grant scope does not match the requested scope.");
         }
-        await this.validateGrant(approval.grant, context.sessionId);
-        activeGrants = [...activeGrants, approval.grant];
+        activeGrants = [...activeGrants, approvalOutcome.grant];
+        // Grants validated before the approval wait may have expired while waiting.
+        await this.validateGrants(activeGrants, context.sessionId);
+        approvalRecord = {
+          grantId: approvalOutcome.grant.id,
+          scopeHash: approvalOutcome.grant.scopeHash,
+          approvedBy: approvalOutcome.grant.approvedBy,
+        };
       }
 
       const profile = await this.stage("profile-unknown", () => this.deps.profiles.get(profileName));
@@ -110,23 +126,30 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       const spec = await this.stage("compile-failed", () =>
         this.deps.compiler.compile(profile, normalized, activeGrants)
       );
+      this.throwIfCancelled(signal);
+      // Record the decision before any handler can change state. In fail-closed
+      // mode this is the barrier that prevents unrecorded execution.
+      await this.audit(normalized, policyDecision, undefined, approvalRecord);
+      this.throwIfCancelled(signal);
+
       const backend = this.deps.broker;
       const execution = normalized.execution;
       const executionResult = execution.kind === "command"
         ? await this.stage("execution-failed", () => backend.run(spec, {
             ...execution.command,
-            environmentOverrides: this.allowedEnvironment(normalized, profile.environmentAllowlist),
-          }, options.signal === undefined ? {} : { signal: options.signal }))
+            environmentOverrides: this.allowedEnvironment(normalized, spec.environmentAllowlist),
+          }, signal === undefined ? {} : { signal }))
         : await this.stage("execution-failed", () => this.deps.trustedInProcess.run(
             normalized,
-            options.signal === undefined ? {} : { signal: options.signal },
+            signal === undefined ? {} : { signal },
           ));
       result = executionResult;
       const output = await this.stage("output-filter-failed", () =>
         this.deps.outputFilter.filter(executionResult, normalized)
       );
-      await this.audit(normalized, policyDecision, result);
-      return { kind: "completed", requestId, result, output };
+      const metadata = this.executionMetadata(executionResult);
+      await this.audit(normalized, policyDecision, metadata, approvalRecord);
+      return { kind: "completed", requestId, metadata, output };
     } catch (error) {
       const code = error instanceof SandboxFailure ? error.failureCode : "internal";
       const message = error instanceof Error ? error.message : "Sandbox execution failed.";
@@ -140,7 +163,8 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
               source: "engine-error",
               reason: message,
             },
-            result,
+            result === undefined ? undefined : this.executionMetadata(result),
+            approvalRecord,
           ));
         } catch {
           if (this.deps.options.auditFailureMode === "fail-closed") {
@@ -165,6 +189,75 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       if (allowed.has(key)) result[key] = value;
     }
     return result;
+  }
+
+  private async requestApproval(
+    approval: ApprovalRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<ApprovalOutcome> {
+    if (signal?.aborted) {
+      throw new SandboxFailure("cancelled", "Sandbox execution was cancelled before approval.");
+    }
+    const pending = this.deps.approvals.request(
+      approval,
+      signal === undefined ? {} : { signal },
+    );
+    return this.cancellable(
+      pending,
+      signal,
+      "Sandbox execution was cancelled while awaiting approval.",
+    );
+  }
+
+  /** Settles with `operation` unless the signal aborts first. */
+  private async cancellable<T>(
+    operation: Promise<T>,
+    signal: AbortSignal | undefined,
+    message: string,
+  ): Promise<T> {
+    if (signal === undefined) return operation;
+    if (signal.aborted) {
+      // Keep a late rejection from becoming an unhandled promise rejection.
+      operation.catch(() => {});
+      throw new SandboxFailure("cancelled", message);
+    }
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => {
+        signal.removeEventListener("abort", onAbort);
+        reject(new SandboxFailure("cancelled", message));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      operation.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            reject(new SandboxFailure("cancelled", message));
+          } else {
+            resolve(value);
+          }
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            reject(new SandboxFailure("cancelled", message));
+          } else {
+            reject(error);
+          }
+        },
+      );
+    });
+  }
+
+  private throwIfCancelled(signal: AbortSignal | undefined): void {
+    if (signal?.aborted) {
+      throw new SandboxFailure("cancelled", "Sandbox execution was cancelled.");
+    }
+  }
+
+  /** Drops raw streams so only the filtered output can leave the sandbox. */
+  private executionMetadata(result: SandboxExecutionResult): SandboxExecutionMetadata {
+    const { stdout: _stdout, stderr: _stderr, ...metadata } = result;
+    return metadata;
   }
 
   private async scopeHash(scope: unknown): Promise<string> {
@@ -215,10 +308,11 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
   private async audit(
     request: NormalizedSandboxRequest,
     decision: SandboxPolicyDecision,
-    result?: SandboxExecutionResult,
+    result?: SandboxExecutionMetadata,
+    approval?: SandboxAuditRecord["approval"],
   ): Promise<void> {
     try {
-      await this.deps.audit.record(await this.auditRecord(request, decision, result));
+      await this.deps.audit.record(await this.auditRecord(request, decision, result, approval));
     } catch (error) {
       if (this.deps.options.auditFailureMode === "fail-closed") {
         throw new SandboxFailure("audit-failed", "Sandbox audit recording failed.", { cause: error });
@@ -229,7 +323,8 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
   private async auditRecord(
     request: NormalizedSandboxRequest,
     decision: SandboxPolicyDecision,
-    result?: SandboxExecutionResult,
+    result?: SandboxExecutionMetadata,
+    approval?: SandboxAuditRecord["approval"],
   ): Promise<SandboxAuditRecord> {
     return {
       timestamp: new Date().toISOString(),
@@ -242,6 +337,7 @@ export class SandboxExecutor implements SandboxedToolExecutorContract {
       decisionSource: decision.source,
       ...(decision.kind === "deny" ? { denialReason: decision.reason } : {}),
       ...(decision.kind !== "deny" ? { profileName: decision.profile } : {}),
+      ...(approval === undefined ? {} : { approval }),
       ...(result === undefined ? {} : {
         backend: result.backend,
         exitCode: result.exitCode,

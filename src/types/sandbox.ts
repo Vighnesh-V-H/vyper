@@ -268,7 +268,10 @@ export interface ApprovalRequest {
 }
 
 export interface ApprovalProvider {
-  request(approval: ApprovalRequest): Promise<ApprovalOutcome>;
+  request(
+    approval: ApprovalRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<ApprovalOutcome>;
   activeGrants(sessionId: string): Promise<readonly Grant[]>;
 }
 
@@ -302,6 +305,12 @@ export interface SandboxExecutionResult {
   readonly backend: string;
   readonly violations: readonly SandboxViolation[];
 }
+
+/**
+ * Execution facts safe to expose to untrusted callers. Raw streams are omitted
+ * so only the output filter can decide what text leaves the sandbox.
+ */
+export type SandboxExecutionMetadata = Omit<SandboxExecutionResult, "stdout" | "stderr">;
 
 export interface SandboxBroker {
   run(
@@ -382,7 +391,7 @@ export type SandboxedToolOutcome =
   | {
       readonly kind: "completed";
       readonly requestId: string;
-      readonly result: SandboxExecutionResult;
+      readonly metadata: SandboxExecutionMetadata;
       readonly output: UntrustedToolOutput;
     }
   | {
