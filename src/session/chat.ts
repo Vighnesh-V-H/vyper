@@ -25,6 +25,23 @@ export interface ChatSessionOpenOptions extends ChatSessionOptions {
 }
 
 /**
+ * A summary injected into a previous request is merged with the following user
+ * message, so it is present at the start of the first user message. Detecting
+ * that prevents injecting the same summary again after every reopen.
+ */
+function containsSummary(
+  messages: readonly Message[],
+  summary: string,
+): boolean {
+  const mergedPrefix = `${summary}\n\n`;
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      (message.content === summary || message.content.startsWith(mergedPrefix)),
+  );
+}
+
+/**
  * Tracks conversation history across agent runs.
  *
  * The agent loop is stateless: each run receives a conversation and returns
@@ -45,7 +62,9 @@ export class ChatSession {
   #session: SessionLog | undefined;
   #recorder: SessionRecorder | undefined;
   #messages: readonly Message[] = [];
+  #pendingSummary: string | undefined;
   #controller: AbortController | undefined;
+  #resetting = false;
 
   constructor(agent: ChatAgent, options: ChatSessionOptions = {}) {
     this.#agent = agent;
@@ -72,6 +91,15 @@ export class ChatSession {
       await options.session.flush();
     }
     session.#messages = snapshot.messages;
+    // A compaction can leave the conversation only in its summary. Carry that
+    // summary into the first request after resuming instead of dropping it,
+    // unless a previous request already committed it into the conversation.
+    session.#pendingSummary =
+      snapshot.summary !== undefined &&
+      snapshot.summary.length > 0 &&
+      !containsSummary(snapshot.messages, snapshot.summary)
+        ? snapshot.summary
+        : undefined;
     return session;
   }
 
@@ -105,12 +133,27 @@ export class ChatSession {
     if (this.#controller !== undefined) {
       throw new SessionLogError(ERROR_MESSAGES.chat.resetWhileRunning);
     }
-    if (this.#recorder !== undefined) await this.#recorder.reset();
-    this.#messages = [];
+    if (this.#resetting) {
+      throw new SessionLogError(ERROR_MESSAGES.chat.resetInProgress);
+    }
+
+    // Block new turns before awaiting the durable marker. Otherwise a turn
+    // could capture the old messages and save them after the reset.
+    this.#resetting = true;
+    try {
+      if (this.#recorder !== undefined) await this.#recorder.reset();
+      this.#messages = [];
+      this.#pendingSummary = undefined;
+    } finally {
+      this.#resetting = false;
+    }
   }
 
   /** Run one user turn and commit its history when it completes. */
   async ask(prompt: string): Promise<AgentResult> {
+    if (this.#resetting) {
+      throw new SessionLogError(ERROR_MESSAGES.chat.resetInProgress);
+    }
     if (this.#controller !== undefined) {
       throw new SessionLogError(ERROR_MESSAGES.chat.turnInProgress);
     }
@@ -118,12 +161,20 @@ export class ChatSession {
     const controller = new AbortController();
     this.#controller = controller;
     const previous = this.#messages;
+    const summary = this.#pendingSummary;
     // A string starts a fresh conversation; later turns pass the whole history
-    // so the agent can validate and plan against prior tool calls.
+    // so the agent can validate and plan against prior tool calls. A pending
+    // compaction summary is prepended as user context for the next request.
     const input: string | readonly Message[] =
-      previous.length === 0
-        ? prompt
-        : [...previous, { role: "user", content: prompt }];
+      summary === undefined
+        ? previous.length === 0
+          ? prompt
+          : [...previous, { role: "user", content: prompt }]
+        : [
+            { role: "user", content: summary },
+            ...previous,
+            { role: "user", content: prompt },
+          ];
 
     try {
       const interceptor =
@@ -145,6 +196,9 @@ export class ChatSession {
         result.status === AgentStatus.MaxSteps
       ) {
         this.#messages = result.messages;
+        // The summary is now part of the committed conversation, so later
+        // turns must not inject it again.
+        this.#pendingSummary = undefined;
       }
       return result;
     } catch (error) {
@@ -159,6 +213,9 @@ export class ChatSession {
   async close(): Promise<void> {
     if (this.#controller !== undefined) {
       throw new SessionLogError(ERROR_MESSAGES.chat.closeWhileRunning);
+    }
+    if (this.#resetting) {
+      throw new SessionLogError(ERROR_MESSAGES.chat.closeWhileResetting);
     }
     if (this.#session !== undefined) await this.#session.close();
   }
