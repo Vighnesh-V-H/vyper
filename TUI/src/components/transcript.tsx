@@ -1,5 +1,6 @@
 import { theme } from "../theme";
 import type { TuiConfig } from "../types";
+import type { TuiCommand } from "../commands";
 import type {
   NoticeTranscriptItem,
   ToolTranscriptItem,
@@ -207,6 +208,8 @@ export interface ComposerProps {
   readonly value: string;
   readonly running: boolean;
   readonly hasApiKey: boolean;
+  readonly commandSuggestions: readonly TuiCommand[];
+  readonly selectedCommand: number;
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: (value: string) => void;
 }
@@ -227,35 +230,66 @@ export function Composer(props: ComposerProps) {
   };
 
   return (
-    <box
-      height={2}
-      flexDirection="row"
-      alignItems="center"
-      border={["top"]}
-      borderColor={theme.border}
-      backgroundColor={theme.surface}
-      paddingLeft={1}
-      paddingRight={1}
-    >
-      <text fg={props.running ? theme.warning : theme.accent} flexShrink={0}>
-        {props.running ? "●" : "❯"}{" "}
-      </text>
-      <input
-        flexGrow={1}
-        minWidth={0}
-        value={props.value}
-        placeholder={placeholder}
-        focused
-        onInput={props.onDraftChange}
-        onSubmit={submit}
+    <box flexDirection="column" flexShrink={0}>
+      {props.commandSuggestions.length > 0 ? (
+        <box
+          flexDirection="column"
+          backgroundColor={theme.surfaceRaised}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          {props.commandSuggestions.map((command, index) => (
+            <box
+              key={command.name}
+              backgroundColor={
+                index === props.selectedCommand ? theme.border : theme.surfaceRaised
+              }
+            >
+              <text
+                fg={index === props.selectedCommand ? theme.text : theme.textMuted}
+                wrapMode="none"
+              >
+                {index === props.selectedCommand ? "❯ " : "  "}
+                <b>{command.name}</b>
+                <span fg={theme.textDim}>  {command.description}</span>
+              </text>
+            </box>
+          ))}
+          <text fg={theme.textDim} wrapMode="none">
+            ↑/↓ navigate · tab complete · enter run
+          </text>
+        </box>
+      ) : null}
+      <box
+        height={2}
+        flexDirection="row"
+        alignItems="center"
+        border={["top"]}
+        borderColor={theme.border}
         backgroundColor={theme.surface}
-        focusedBackgroundColor={theme.surface}
-        textColor={theme.text}
-        focusedTextColor={theme.text}
-        placeholderColor={theme.textDim}
-        cursorColor={theme.accent}
-        maxLength={4_000}
-      />
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <text fg={props.running ? theme.warning : theme.accent} flexShrink={0}>
+          {props.running ? "●" : "❯"}{" "}
+        </text>
+        <input
+          flexGrow={1}
+          minWidth={0}
+          value={props.value}
+          placeholder={placeholder}
+          focused
+          onInput={props.onDraftChange}
+          onSubmit={submit}
+          backgroundColor={theme.surface}
+          focusedBackgroundColor={theme.surface}
+          textColor={theme.text}
+          focusedTextColor={theme.text}
+          placeholderColor={theme.textDim}
+          cursorColor={theme.accent}
+          maxLength={4_000}
+        />
+      </box>
     </box>
   );
 }

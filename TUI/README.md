@@ -29,7 +29,10 @@ still opens so you can inspect tools and the harness inventory.
 | `ctrl+n` | start a new session |
 | `ctrl+c` | abort, then quit |
 
-`/new` and `/clear` in the composer also start a fresh chat.
+Type `/` in the composer to list every slash command. Use `↑` / `↓` to select,
+`tab` to complete the highlighted command, and `enter` to execute it. Commands
+are filtered as you type: `/new` and `/clear` start a fresh chat; `/exit` and
+`/quit` quit Vyper.
 
 ## Structure
 
