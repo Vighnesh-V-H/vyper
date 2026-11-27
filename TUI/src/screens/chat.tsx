@@ -5,6 +5,8 @@ import { Composer, Transcript } from "../components/transcript";
 export interface ChatScreenProps {
   readonly config: TuiConfig;
   readonly chat: ChatController;
+  readonly draft: string;
+  readonly onDraftChange: (value: string) => void;
   readonly onSubmit: (value: string) => void;
 }
 
@@ -14,8 +16,10 @@ export function ChatScreen(props: ChatScreenProps) {
     <box flexDirection="column" flexGrow={1} minHeight={0}>
       <Transcript items={props.chat.state.items} config={props.config} />
       <Composer
+        value={props.draft}
         running={props.chat.busy}
         hasApiKey={props.config.apiKey !== undefined}
+        onDraftChange={props.onDraftChange}
         onSubmit={props.onSubmit}
       />
     </box>

@@ -25,6 +25,8 @@ function nextView(current: View, direction: 1 | -1): View {
  */
 export function App(props: AppProps) {
   const [view, setView] = useState<View>("chat");
+  // Drafts live above the screen switch so inspecting tools never loses text.
+  const [draft, setDraft] = useState("");
   const chat = useChat(props.config);
 
   const submit = useCallback(
@@ -87,7 +89,13 @@ export function App(props: AppProps) {
       />
       <box flexGrow={1} minHeight={0}>
         {view === "chat" ? (
-          <ChatScreen config={props.config} chat={chat} onSubmit={submit} />
+          <ChatScreen
+            config={props.config}
+            chat={chat}
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={submit}
+          />
         ) : view === "tools" ? (
           <ToolsScreen config={props.config} state={chat.state} />
         ) : (

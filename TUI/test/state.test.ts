@@ -200,6 +200,23 @@ describe("chatReducer", () => {
     );
   });
 
+  test("leaves the running phase when an opening is cancelled", () => {
+    const prompted = chatReducer(createInitialChatState(), {
+      type: "prompt",
+      text: "slow session open",
+    });
+
+    expect(prompted.phase).toBe("running");
+
+    const cancelled = chatReducer(prompted, { type: "cancelled" });
+    expect(cancelled.phase).toBe("aborted");
+    expect(cancelled.items.at(-1)).toMatchObject({
+      kind: "notice",
+      tone: "warning",
+      text: "cancelled before the turn started",
+    });
+  });
+
   test("reset returns a clean idle state", () => {
     const state = chatReducer(
       {

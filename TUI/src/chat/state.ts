@@ -61,6 +61,7 @@ export type ChatAction =
   | { readonly type: "session-opened"; readonly sessionId: string }
   | { readonly type: "agent-event"; readonly event: AgentEvent }
   | { readonly type: "finished"; readonly result: AgentResult }
+  | { readonly type: "cancelled" }
   | { readonly type: "failed"; readonly message: string }
   | { readonly type: "reset" };
 
@@ -250,6 +251,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "session-opened":
       return { ...state, sessionId: action.sessionId };
+
+    case "cancelled":
+      return notice(
+        { ...state, phase: "aborted", activeTool: undefined, error: undefined },
+        "warning",
+        "cancelled before the turn started",
+      );
 
     case "failed":
       return notice(

@@ -80,6 +80,33 @@ describe("App", () => {
     }
   });
 
+  test("keeps the composer draft while switching views", async () => {
+    const setup = await testRender(
+      <App config={testConfig()} onExit={() => {}} />,
+      { width: 100, height: 30 },
+    );
+
+    try {
+      await act(async () => {
+        await setup.mockInput.typeText("keep this draft");
+        setup.mockInput.pressTab();
+      });
+      await setup.renderOnce();
+      expect(setup.captureCharFrame()).toContain("REGISTERED TOOLS");
+
+      await act(() => {
+        setup.mockInput.pressTab({ shift: true });
+      });
+      await setup.renderOnce();
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("keep this draft");
+      expect(frame).not.toContain("Ask Vyper to read");
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
   test("surfaces the missing-key error when a prompt is submitted", async () => {
     const setup = await testRender(
       <App config={testConfig()} onExit={() => {}} />,

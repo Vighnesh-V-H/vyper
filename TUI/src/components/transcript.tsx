@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { theme } from "../theme";
 import type { TuiConfig } from "../types";
 import type {
@@ -205,14 +204,14 @@ export function Transcript(props: TranscriptProps) {
 }
 
 export interface ComposerProps {
+  readonly value: string;
   readonly running: boolean;
   readonly hasApiKey: boolean;
+  readonly onDraftChange: (value: string) => void;
   readonly onSubmit: (value: string) => void;
 }
 
 export function Composer(props: ComposerProps) {
-  const [value, setValue] = useState("");
-
   const placeholder = props.running
     ? "Vyper is working · esc aborts"
     : props.hasApiKey
@@ -223,7 +222,7 @@ export function Composer(props: ComposerProps) {
     if (props.running) return;
     const prompt = next.trim();
     if (prompt.length === 0) return;
-    setValue("");
+    props.onDraftChange("");
     props.onSubmit(prompt);
   };
 
@@ -244,10 +243,10 @@ export function Composer(props: ComposerProps) {
       <input
         flexGrow={1}
         minWidth={0}
-        value={value}
+        value={props.value}
         placeholder={placeholder}
         focused
-        onInput={setValue}
+        onInput={props.onDraftChange}
         onSubmit={submit}
         backgroundColor={theme.surface}
         focusedBackgroundColor={theme.surface}
