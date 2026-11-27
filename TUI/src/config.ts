@@ -1,4 +1,5 @@
 import { createToolRegistry, builtinTools } from "../../src/tools/discovery";
+import { spawnSync } from "node:child_process";
 import { clockTool } from "../../src/tools/builtin/clock";
 import { resolveSessionDirectory } from "../../src/cli";
 import type { ToolDefinition } from "../../src/types/tools";
@@ -35,8 +36,19 @@ export function loadTuiConfig(): TuiConfig {
   const apiKey = process.env[API_KEY_VARIABLE]?.trim();
   const configuredModel = process.env.GEMINI_MODEL?.trim();
 
+  const cwd = process.cwd();
+  const branchResult = spawnSync("git", ["branch", "--show-current"], {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
   return {
-    cwd: process.cwd(),
+    cwd,
+    branch:
+      branchResult.status === 0 && branchResult.stdout.trim().length > 0
+        ? branchResult.stdout.trim()
+        : "detached",
     model:
       configuredModel === undefined || configuredModel.length === 0
         ? DEFAULT_MODEL

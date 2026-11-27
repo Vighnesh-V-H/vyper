@@ -11,6 +11,7 @@ export interface ToolSummary {
 /** Everything the TUI needs, loaded once at startup. */
 export interface TuiConfig {
   readonly cwd: string;
+  readonly branch: string;
   readonly model: string;
   /** Undefined when the user has not configured a provider key. */
   readonly apiKey: string | undefined;
