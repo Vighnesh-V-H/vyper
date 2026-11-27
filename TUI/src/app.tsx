@@ -3,10 +3,8 @@ import { useKeyboard } from "@opentui/react";
 import { theme } from "./theme";
 import type { TuiConfig } from "./types";
 import { useChat } from "./chat/use-chat";
-import { Header, StatusBar, TabBar, VIEWS, type View } from "./components/chrome";
-import { AboutScreen } from "./screens/about";
+import { Header, StatusBar } from "./components/chrome";
 import { ChatScreen } from "./screens/chat";
-import { ToolsScreen } from "./screens/tools";
 import { COMMANDS, matchingCommands } from "./commands";
 
 export interface AppProps {
@@ -14,25 +12,18 @@ export interface AppProps {
   readonly onExit: () => void;
 }
 
-function nextView(current: View, direction: 1 | -1): View {
-  const index = VIEWS.findIndex((view) => view.id === current);
-  const next = (index + direction + VIEWS.length) % VIEWS.length;
-  return VIEWS[next]?.id ?? "chat";
-}
-
 /**
  * Shell for all views. The chat controller lives here so a running turn keeps
  * going while the user inspects tools or the harness inventory.
  */
 export function App(props: AppProps) {
-  const [view, setView] = useState<View>("chat");
   // Drafts live above the screen switch so inspecting tools never loses text.
   const [draft, setDraft] = useState("");
   const [selectedCommand, setSelectedCommand] = useState(0);
   const chat = useChat(props.config);
   const commandSuggestions = useMemo(
-    () => matchingCommands(view === "chat" ? draft : ""),
-    [draft, view],
+    () => matchingCommands(draft),
+    [draft],
   );
 
   const executeCommand = useCallback(
@@ -106,12 +97,6 @@ export function App(props: AppProps) {
       return;
     }
 
-    if (key.name === "tab") {
-      key.preventDefault();
-      setView((current) => nextView(current, key.shift ? -1 : 1));
-      return;
-    }
-
     if (key.name === "escape" && chat.busy) {
       key.preventDefault();
       chat.abort();
@@ -126,31 +111,18 @@ export function App(props: AppProps) {
       backgroundColor={theme.background}
     >
       <Header config={props.config} />
-      <TabBar
-        active={view}
-        toolCount={props.config.toolSummaries.length}
-        onChange={setView}
+      <ChatScreen
+        config={props.config}
+        chat={chat}
+        draft={draft}
+        onDraftChange={(value) => {
+          setDraft(value);
+          setSelectedCommand(0);
+        }}
+        commandSuggestions={commandSuggestions}
+        selectedCommand={selectedCommand}
+        onSubmit={submit}
       />
-      <box flexGrow={1} minHeight={0}>
-        {view === "chat" ? (
-          <ChatScreen
-            config={props.config}
-            chat={chat}
-            draft={draft}
-            onDraftChange={(value) => {
-              setDraft(value);
-              setSelectedCommand(0);
-            }}
-            commandSuggestions={commandSuggestions}
-            selectedCommand={selectedCommand}
-            onSubmit={submit}
-          />
-        ) : view === "tools" ? (
-          <ToolsScreen config={props.config} state={chat.state} />
-        ) : (
-          <AboutScreen config={props.config} />
-        )}
-      </box>
       <StatusBar state={chat.state} maxSteps={props.config.maxSteps} />
     </box>
   );
