@@ -19,6 +19,7 @@ const tools: ToolCatalog = {
 function testConfig(): TuiConfig {
   return {
     cwd: process.cwd(),
+    branch: "test-branch",
     model: "test-model",
     apiKey: "test-key",
     instructions: "test instructions",

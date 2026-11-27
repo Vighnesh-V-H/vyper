@@ -110,7 +110,7 @@ export function App(props: AppProps) {
       height="100%"
       backgroundColor={theme.background}
     >
-      <Header config={props.config} />
+      <Header config={props.config} state={chat.state} />
       <ChatScreen
         config={props.config}
         chat={chat}
