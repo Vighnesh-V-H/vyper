@@ -6,8 +6,8 @@ import type {
   ToolTranscriptItem,
   TranscriptItem,
 } from "../chat/state";
-import { displayPath, formatDuration, preview } from "../format";
-import { Callout, KeyHint, SectionHeading, toneColor } from "./primitives";
+import { formatDuration, preview } from "../format";
+import { toneColor } from "./primitives";
 
 const NOTICE_PREFIX: Record<NoticeTranscriptItem["tone"], string> = {
   muted: "·",
@@ -120,60 +120,14 @@ export interface EmptyStateProps {
   readonly config: TuiConfig;
 }
 
-export function EmptyState(props: EmptyStateProps) {
+export function EmptyState(_props: EmptyStateProps) {
   return (
     <box flexDirection="column" width="100%" gap={1}>
       <box flexDirection="column">
-        <ascii-font text="VYPER" font="tiny" color={theme.accent} />
+        <ascii-font text="VYPER" font="block" color={theme.accent} />
         <text fg={theme.text}>
           A small terminal coding agent with a typed, provider-neutral loop.
         </text>
-      </box>
-
-      {props.config.apiKey === undefined ? (
-        <Callout tone="warning">
-          <text fg={theme.warning}>
-            GOOGLE_GENERATIVE_AI_API_KEY is not set.
-          </text>
-          <text fg={theme.textDim}>
-            Add it to .env and restart to chat. Tool inspection and this
-            interface still work offline.
-          </text>
-        </Callout>
-      ) : null}
-
-      <box flexDirection="column">
-        <SectionHeading title="try" />
-        <text fg={theme.textMuted}>
-          read src/agent/agent.ts and explain the loop
-        </text>
-        <text fg={theme.textMuted}>
-          find every place sessions are persisted
-        </text>
-        <text fg={theme.textMuted}>
-          which tools do you have, and what are they for?
-        </text>
-      </box>
-
-      <box flexDirection="column">
-        <SectionHeading title="local" />
-        <text fg={theme.textDim} wrapMode="word">
-          sessions are appended to {displayPath(props.config.sessionDirectory)}
-        </text>
-        <text fg={theme.textDim}>
-          {props.config.toolSummaries.length} tools · {props.config.maxSteps} max
-          steps · full history
-        </text>
-      </box>
-
-      <box flexDirection="column">
-        <SectionHeading title="keys" />
-        <box flexDirection="row" gap={2}>
-          <KeyHint keyName="enter" label="send" />
-          <KeyHint keyName="esc" label="abort" />
-          <KeyHint keyName="tab" label="switch view" />
-          <KeyHint keyName="ctrl+n" label="new chat" />
-        </box>
       </box>
     </box>
   );
