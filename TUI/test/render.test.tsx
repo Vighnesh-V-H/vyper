@@ -107,6 +107,57 @@ describe("App", () => {
     }
   });
 
+  test("shows, navigates, completes, and executes slash commands", async () => {
+    let exited = false;
+    const setup = await testRender(
+      <App config={testConfig()} onExit={() => { exited = true; }} />,
+      { width: 100, height: 30 },
+    );
+
+    try {
+      await act(async () => {
+        await setup.mockInput.typeText("/");
+      });
+      await setup.renderOnce();
+      let frame = setup.captureCharFrame();
+      expect(frame).toContain("/new");
+      expect(frame).toContain("/clear");
+      expect(frame).toContain("/exit");
+      expect(frame).toContain("/quit");
+
+      await act(() => setup.mockInput.pressArrow("down"));
+      await act(() => setup.mockInput.pressArrow("down"));
+      await act(() => setup.mockInput.pressTab());
+      await setup.renderOnce();
+      expect(setup.captureCharFrame()).toContain("/exit ");
+
+      await act(() => {
+        setup.mockInput.pressEnter();
+      });
+      expect(exited).toBe(true);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
+  test("executes the highlighted command on enter without tab completion", async () => {
+    let exited = false;
+    const setup = await testRender(
+      <App config={testConfig()} onExit={() => { exited = true; }} />,
+      { width: 100, height: 30 },
+    );
+
+    try {
+      await act(async () => setup.mockInput.typeText("/"));
+      await act(() => setup.mockInput.pressArrow("down"));
+      await act(() => setup.mockInput.pressArrow("down"));
+      await act(() => setup.mockInput.pressEnter());
+      expect(exited).toBe(true);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
   test("surfaces the missing-key error when a prompt is submitted", async () => {
     const setup = await testRender(
       <App config={testConfig()} onExit={() => {}} />,
